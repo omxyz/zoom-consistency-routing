@@ -16,6 +16,7 @@ sys.path.insert(0, "/workspace")
 
 import torch
 from PIL import Image
+
 from prepare import download_dataset, get_sample, point_in_box
 
 PHI4_PATH = os.environ.get("PHI4_PATH", "/workspace/phi4-vision-15b")
