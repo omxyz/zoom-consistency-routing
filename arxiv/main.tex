@@ -127,7 +127,7 @@ def route(image, instruction):
     else:
         return pred_B
 \end{lstlisting}
-\caption{Zoom consistency routing. Each model runs its own 2-step zoom pipeline. The zoom consistency $c$ (line 4) measures how far step-2 deviates from the crop center. The router (line 12) selects the model with lower $c$.}
+\caption{Zoom consistency routing. Each model runs its own 2-step zoom pipeline. The zoom consistency $c$ (line 5) measures how far step-2 deviates from the crop center. The router (line 12) selects the model with lower $c$.}
 \label{fig:pseudocode}
 \end{figure}
 
@@ -233,12 +233,12 @@ All other ensemble strategies extract negative oracle headroom: they introduce m
 \toprule
 \textbf{Category} & \textbf{$n$} & \textbf{KV} & \textbf{Router} & \textbf{$\Delta$} & \textbf{Qwen \%} \\
 \midrule
-Office & 230 & 89.6\% & 90.4\% & +0.9\% & 47.4\% \\
+Office & 230 & 90.0\% & 90.4\% & +0.4\% & 47.4\% \\
 Scientific & 254 & 83.1\% & 83.9\% & +0.8\% & 36.2\% \\
-Dev & 299 & 82.9\% & 83.6\% & +0.7\% & 35.1\% \\
-CAD & 261 & 78.5\% & 78.9\% & +0.4\% & 13.4\% \\
-Creative & 341 & 74.5\% & 75.7\% & +1.2\% & 38.1\% \\
-OS & 196 & 72.4\% & 73.5\% & +1.0\% & 42.9\% \\
+Dev & 299 & 83.3\% & 83.6\% & +0.3\% & 35.1\% \\
+CAD & 261 & 79.3\% & 78.9\% & $-$0.4\% & 13.4\% \\
+Creative & 341 & 74.2\% & 75.7\% & +1.5\% & 38.1\% \\
+OS & 196 & 70.9\% & 73.5\% & +2.6\% & 42.9\% \\
 \bottomrule
 \end{tabular}
 \end{table}
