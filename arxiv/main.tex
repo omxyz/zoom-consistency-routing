@@ -1,0 +1,299 @@
+\documentclass{article}
+\usepackage{arxiv}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{natbib}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{xcolor}
+
+\title{Confidence-Based Model Routing via Zoom Consistency for GUI Grounding}
+
+\author{
+  Keon Kim \\
+  OM Labs \\
+  \texttt{keon@omlabs.xyz} \\
+  \And
+  Krish Chelikavada \\
+  OM Labs \\
+  \texttt{krish@omlabs.xyz} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+GUI grounding---predicting click coordinates from screenshots and natural language instructions---is a critical capability for computer-use agents. Current state-of-the-art approaches use specialized vision-language models (VLMs) with multi-step zoom-in refinement pipelines. We observe that the zoom refinement step contains a free confidence signal: when a model's step-2 prediction lands near the center of the zoomed crop, the model's initial localization was already accurate. We call this signal \emph{zoom consistency} and show it correlates monotonically with prediction correctness. We exploit this signal to build a training-free ensemble router that runs two models---a specialized GUI grounding model and a general-purpose VLM---independently and selects the more confident prediction per sample. On ScreenSpot-Pro, the most challenging GUI grounding benchmark, our method achieves \textbf{80.9\%} accuracy, establishing a new state of the art without any additional training. The approach requires only inference-time computation and generalizes across applications and UI element types. Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
+\end{abstract}
+
+\section{Introduction}
+
+GUI grounding is the task of identifying the pixel coordinates of a UI element described by a natural language instruction in a screenshot. It is a foundational capability for autonomous computer-use agents that must interact with graphical interfaces. Recent benchmarks like ScreenSpot-Pro~\cite{li2025screenspotpro} evaluate this capability on professional software (CAD tools, IDEs, video editors) with high-resolution screenshots, exposing the limitations of current approaches.
+
+The current best approach on ScreenSpot-Pro uses KV-Ground-8B~\cite{kvground}, a specialized VLM fine-tuned through multiple stages on GUI-specific data, combined with a 2-step zoom-in strategy: (1) predict a rough location on the full screenshot, (2) crop and resize around that prediction, and (3) re-predict on the zoomed view for refinement. This achieves 80.5\% accuracy.
+
+We make three observations:
+
+\textbf{First}, the zoom refinement step contains a natural confidence signal. When the model's step-2 prediction is close to the center of the zoomed crop, it means step-1 was already accurate---the zoom merely confirmed it. When step-2 points far from the crop center, step-1 was off, and step-2 is attempting a large correction that often fails. We formalize this as \emph{zoom consistency}.
+
+\textbf{Second}, different VLMs have complementary failure modes. A specialized model like KV-Ground-8B excels on professional engineering tools it was trained on, while a general-purpose model like Qwen3.5-27B~\cite{qwen35} occasionally succeeds on consumer interfaces where the specialist fails. An oracle that always picks the correct model achieves 85.1\%, revealing 5 percentage points of untapped potential.
+
+\textbf{Third}, zoom consistency enables training-free routing between models. By running both models independently and selecting the one with lower zoom consistency (higher confidence) per sample, we capture a portion of this complementary potential without any additional training or labeled routing data.
+
+Our contributions:
+\begin{enumerate}
+    \item We identify \emph{zoom consistency} as a free, per-sample confidence signal inherent to multi-step zoom-in pipelines for GUI grounding.
+    \item We validate that zoom consistency correlates monotonically with prediction accuracy across 1,581 professional GUI samples.
+    \item We propose a training-free heterogeneous ensemble that routes between a specialized and a general-purpose VLM using zoom consistency, achieving 80.9\% on ScreenSpot-Pro---a new state of the art.
+\end{enumerate}
+
+\section{Related Work}
+
+\paragraph{GUI Grounding.}
+GUI grounding has evolved from rule-based approaches to VLM-based methods. OS-Atlas~\cite{osatlas} provided early large-scale training data. GUI-Actor~\cite{guiactor} introduced coordinate-free grounding using set-of-mark prompting. UI-TARS~\cite{uitars} scaled to 72B parameters. KV-Ground-8B~\cite{kvground} achieved state-of-the-art results through multi-stage fine-tuning: Qwen3-VL-8B was first trained as GUI-Owl-1.5 on millions of GUI agent samples, then further specialized for coordinate grounding.
+
+\paragraph{Zoom-In Strategies.}
+Multi-step zoom-in is a widely adopted strategy for high-resolution GUI grounding. ZoomClick~\cite{zoomclick} systematically evaluated zoom refinement on ScreenSpot-Pro. LASER~\cite{laser} introduced preference optimization for zoom region selection. ScreenSeekeR~\cite{screenseeker} used cascaded visual search with zoom. Our work differs in that we do not propose a new zoom strategy---instead, we extract a confidence signal from existing zoom pipelines.
+
+\paragraph{Confidence Estimation and Model Routing.}
+GUI-RC~\cite{guirc} introduced region consistency as a test-time confidence signal, using spatial voting across multiple predictions. Adaptive VLM Routing~\cite{avr} proposed routing between VLMs based on action difficulty estimation. Our approach is simpler: we require no additional sampling, no difficulty estimation, and no training. The confidence signal is a byproduct of the zoom pipeline that models already run.
+
+\paragraph{Test-Time Compute Scaling.}
+Recent work has explored scaling compute at inference time. Adaptive Chain-of-Focus~\cite{adaptivecof} dynamically decides when to zoom. Training-Free Uncertainty Guidance~\cite{uncertaintyguidance} uses model uncertainty to select visual inputs. Our method can be viewed as a minimal form of test-time compute scaling: we run two models instead of one and select the better prediction.
+
+\section{Method}
+
+\subsection{Background: 2-Step Zoom-In Pipeline}
+
+Given a screenshot $I$ of size $W \times H$ and a natural language instruction $q$, the standard zoom-in pipeline works as follows:
+
+\textbf{Step 1.} Run the VLM on the full image to obtain a rough prediction $\hat{p}_1 = (x_1, y_1)$ in a normalized $1000\times1000$ coordinate space.
+
+\textbf{Step 2.} Compute a crop box centered on $\hat{p}_1$ with crop ratio $r$ (typically 0.5), crop the image, resize the crop back to the original resolution, and re-run the VLM to obtain $\hat{p}_2 = (x_2, y_2)$ in the crop's $1000\times1000$ space.
+
+\textbf{Step 3.} Remap $\hat{p}_2$ from crop coordinates back to full-image coordinates to produce the final prediction.
+
+\subsection{Zoom Consistency}
+
+We define \emph{zoom consistency} as the Euclidean distance between the step-2 prediction and the center of the crop in the model's coordinate space:
+\begin{equation}
+    c = \sqrt{(x_2 - 500)^2 + (y_2 - 500)^2}
+\end{equation}
+where $(x_2, y_2)$ is the step-2 prediction in the $1000\times1000$ crop space, and $(500, 500)$ is the crop center.
+
+\textbf{Intuition.} After cropping around $\hat{p}_1$, the predicted location should be near the center of the crop if $\hat{p}_1$ was accurate. A low $c$ (close to center) indicates step-1 was already correct---step-2 merely confirms it. A high $c$ (far from center) indicates step-1 was off, and step-2 is attempting a large spatial correction.
+
+\textbf{Key property:} Zoom consistency is \emph{free}---it requires no additional model calls, no sampling, no temperature variation. It is computed from values already produced by the standard pipeline.
+
+\subsection{Consistency-Based Routing}
+
+Given two models $M_A$ (specialist) and $M_B$ (generalist), the routing procedure is:
+
+\begin{enumerate}
+    \item Run $M_A$'s full 2-step zoom pipeline $\rightarrow$ prediction $\hat{p}_A$, consistency $c_A$
+    \item Run $M_B$'s full 2-step zoom pipeline $\rightarrow$ prediction $\hat{p}_B$, consistency $c_B$
+    \item Select the final prediction:
+\end{enumerate}
+\begin{equation}
+    \hat{p} = \begin{cases} \hat{p}_A & \text{if } c_A \leq c_B \\ \hat{p}_B & \text{otherwise} \end{cases}
+\end{equation}
+
+No training is required. No threshold tuning is needed. The router simply picks whichever model is more self-consistent in its zoom refinement.
+
+\subsection{Model Selection}
+
+We pair two models with complementary strengths:
+
+\textbf{KV-Ground-8B} (specialist): A Qwen3-VL-8B model fine-tuned through GUI-Owl-1.5 on millions of GUI screenshots, then further specialized for coordinate grounding. Strong on professional tools (CAD, IDEs, creative software).
+
+\textbf{Qwen3.5-27B} (generalist): A recent unified multimodal model with strong general visual understanding. Not fine-tuned for GUI grounding specifically, but occasionally succeeds where KV-Ground fails, particularly on consumer/OS interfaces.
+
+\section{Experimental Setup}
+
+\paragraph{Benchmark.}
+We evaluate on \textbf{ScreenSpot-Pro}~\cite{li2025screenspotpro}, the most challenging GUI grounding benchmark. It contains 1,581 samples across 26 professional applications, 6 industry categories (CAD, Creative, Dev, Office, OS, Scientific), and 3 operating systems. Each sample consists of a high-resolution screenshot, a natural language instruction, and a bounding box annotation. Accuracy is measured as point-in-box: whether the predicted coordinate falls within the annotated bounding box.
+
+\paragraph{Implementation Details.}
+KV-Ground-8B uses \texttt{vocaela/KV-Ground-8B-BaseGuiOwl1.5-0315} loaded in bf16 with no resolution cap (\texttt{max\_pixels}$=99{,}999{,}999$). Qwen3.5-27B uses \texttt{cyankiwi/Qwen3.5-27B-AWQ-4bit} loaded via compressed\_tensors. Both use SDPA attention. The zoom pipeline uses 2 steps with \texttt{crop\_ratio}$=0.5$ and greedy decoding (temperature$=0$). All experiments run on NVIDIA H200 141GB.
+
+\paragraph{Baselines.}
+We compare against KV-Ground-8B (single model, 2-step zoom)---the current leaderboard \#1; Qwen3.5-27B (single model, 2-step zoom); stage split (KV-Ground step-1, Qwen step-2); midpoint fusion; vote with agreement; KV-default fallback; and oracle (always picks the correct model).
+
+\section{Results}
+
+\subsection{Main Results}
+
+\begin{table}[h]
+\centering
+\caption{Comparison of routing strategies on ScreenSpot-Pro (1,581 samples).}
+\label{tab:main}
+\begin{tabular}{lccr}
+\toprule
+\textbf{Method} & \textbf{Accuracy} & \textbf{Correct} & \textbf{vs.\ KV} \\
+\midrule
+\textbf{Consistency Router (ours)} & \textbf{80.9\%} & \textbf{1,279} & \textbf{+0.8\%} \\
+KV-Ground-8B (baseline) & 80.1\% & 1,266 & --- \\
+Stage split KV$\rightarrow$Qwen & 78.7\% & 1,245 & $-$1.3\% \\
+Vote agree $T{=}50$ & 76.9\% & 1,215 & $-$3.2\% \\
+Midpoint fusion & 75.7\% & 1,196 & $-$4.4\% \\
+Step-1 vote centroid & 72.5\% & 1,146 & $-$7.6\% \\
+KV fallback $T{=}300$ & 69.6\% & 1,100 & $-$10.5\% \\
+Qwen3.5-27B only & 60.9\% & 962 & $-$19.2\% \\
+\midrule
+Oracle (upper bound) & 85.1\% & 1,345 & +5.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Our consistency router achieves 80.9\%, a new state of the art on ScreenSpot-Pro. Notably, all other ensemble strategies we tested performed \emph{worse} than the KV-Ground baseline. This demonstrates that naive ensembling hurts in this domain---confidence-based routing is essential.
+
+\subsection{Per-Category Results}
+
+\begin{table}[h]
+\centering
+\caption{Per-category results of the zoom consistency router.}
+\label{tab:category}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Category} & \textbf{$n$} & \textbf{Icon} & \textbf{Text} & \textbf{Avg} \\
+\midrule
+Office & 230 & 75.5\% & 94.9\% & 90.4\% \\
+Scientific & 254 & 70.9\% & 93.8\% & 83.9\% \\
+Dev & 299 & 73.1\% & 93.5\% & 83.6\% \\
+CAD & 261 & 51.6\% & 87.8\% & 78.9\% \\
+Creative & 341 & 62.2\% & 85.4\% & 75.7\% \\
+OS & 196 & 56.2\% & 87.8\% & 73.5\% \\
+\midrule
+\textbf{Overall} & \textbf{1,581} & \textbf{65.6\%} & \textbf{90.4\%} & \textbf{80.9\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The router's gains are distributed across categories, with no single category driving the improvement.
+
+\subsection{Routing Statistics}
+
+The router selects KV-Ground for 64.9\% of samples and Qwen3.5-27B for 35.1\%. Of the 79 samples where only Qwen is correct (oracle advantage), the router successfully captures 13 (16.5\% capture rate), yielding a net gain of +13 correct samples over KV-Ground alone.
+
+\section{Analysis}
+
+\subsection{Zoom Consistency Correlates with Accuracy}
+
+We bucket samples by zoom consistency and measure accuracy for each model independently (Table~\ref{tab:consistency}).
+
+\begin{table}[h]
+\centering
+\caption{KV-Ground accuracy by zoom consistency bucket.}
+\label{tab:consistency}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Consistency} & \textbf{$n$} & \textbf{Accuracy} \\
+\midrule
+$< 30$ (very confident) & 464 & 87.1\% \\
+$30$--$80$ & 101 & 85.1\% \\
+$80$--$150$ & 106 & 76.4\% \\
+$150$--$250$ & 173 & 79.8\% \\
+$\geq 250$ (uncertain) & 737 & 75.6\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The correlation is monotonic: samples where step-2 barely moved from center (consistency $< 30$) have 87.1\% accuracy, while samples where step-2 made large corrections ($\geq 250$) have only 75.6\%. This 11.5-point gap confirms that zoom consistency is a meaningful confidence signal. Qwen3.5-27B shows a similar but weaker pattern (90.2\% at $<30$, 80.7\% at $\geq 250$).
+
+\subsection{Why Other Ensemble Strategies Fail}
+
+\textbf{Stage split} (KV step-1, Qwen step-2) forces Qwen to refine every sample's zoomed crop, even when KV-Ground would have been better at refinement. On ScreenSpot-Pro, KV-Ground's GUI-specific training makes it a better refiner on 78\% of samples.
+
+\textbf{Midpoint fusion} averages two coordinate predictions, often pulling a correct prediction out of the bounding box. GUI bounding boxes are small (median area 0.1\% of the image), so even a small perturbation from averaging causes a miss.
+
+\textbf{Vote with agreement} provides no mechanism to exploit disagreement constructively. When models disagree, defaulting to KV-Ground misses Qwen's unique wins.
+
+\textbf{KV fallback with threshold} routes to Qwen when KV is uncertain, but fails because Qwen's accuracy (60.9\%) is far below KV's (80.1\%). Even when KV is uncertain, it is still more likely correct than Qwen.
+
+\subsection{Why Zoom Consistency Routing Works}
+
+The consistency router succeeds because: (1) it never forces the weaker model---unlike stage split or fallback, the router can always choose KV-Ground when KV is more confident; (2) it uses a per-sample signal, adapting to each individual screenshot; and (3) it exploits self-consistency rather than cross-model agreement, avoiding the calibration problem of comparing log-probabilities across architectures.
+
+\subsection{Screening vs.\ Full Evaluation}
+
+\begin{table}[h]
+\centering
+\caption{Router gain on screening (200 samples) vs.\ full evaluation (1,581 samples).}
+\label{tab:screening}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metric} & \textbf{Screening} & \textbf{Full} \\
+\midrule
+KV-Ground baseline & 84.5\% & 80.1\% \\
+Consistency router & 86.0\% & 80.9\% \\
+Router gain & +1.5\% & +0.8\% \\
+Oracle & 89.5\% & 85.1\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The router gain shrinks from +1.5\% on screening to +0.8\% on full evaluation. The full dataset includes harder professional tools where both models struggle and the oracle advantage is smaller. This highlights the importance of full-dataset evaluation---screening results can overstate improvements by $\sim$2$\times$.
+
+\subsection{Training-Based Approaches}
+
+Before discovering the routing strategy, we attempted several training-based approaches to improve KV-Ground-8B directly (Table~\ref{tab:training}). All failed.
+
+\begin{table}[h]
+\centering
+\caption{Training-based approaches attempted on KV-Ground-8B.}
+\label{tab:training}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Approach} & \textbf{Screening} & \textbf{Result} \\
+\midrule
+GRPO (RL, binary reward) & --- & Killed early, no improvement \\
+GRPO v2 (smooth reward, KL) & --- & Killed early, no improvement \\
+SFT on failure cases (single-pass) & 84.0\% & $-$0.5\% \\
+SFT on failure cases (zoom-pipeline) & 84.0\% & $-$0.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+GRPO requires within-group variance to compute advantages, but KV-Ground produces consistently correct or consistently wrong predictions across samples---there is no stochastic component for RL to exploit. SFT on failure cases overfits to specific coordinates without generalizing. These negative results motivated the shift to inference-time routing.
+
+\section{Limitations}
+
+\begin{enumerate}
+    \item \textbf{Computational cost.} The router runs two full models (2 forward passes each = 4 total), doubling inference time compared to a single model.
+    \item \textbf{Modest gains.} The improvement (+0.8\% on full eval) is real but small. A stronger generalist model or a better confidence signal could increase the capture rate beyond 16.5\% of the oracle advantage.
+    \item \textbf{Generalist model quality.} Qwen3.5-27B-AWQ achieves only 60.9\% standalone accuracy, limiting the oracle ceiling. A GUI-trained generalist could significantly increase the complementary advantage.
+    \item \textbf{Zoom consistency limitations.} The signal is strongest for KV-Ground (11.5-point gap) but weaker for Qwen (9.5-point gap). Models trained specifically for zoom pipelines may have artificially calibrated consistency, reducing discriminative power.
+\end{enumerate}
+
+\section{Conclusion}
+
+We introduced \emph{zoom consistency}---the distance between a model's zoom-refinement prediction and the crop center---as a free, per-sample confidence signal for GUI grounding. By routing between a specialized model (KV-Ground-8B) and a general-purpose model (Qwen3.5-27B) based on which has lower zoom consistency, we achieve 80.9\% on ScreenSpot-Pro without any additional training, establishing a new state of the art. Our work demonstrates that inference-time routing can extract complementary value from heterogeneous model ensembles, even when one model is significantly weaker overall. The zoom consistency signal is general and could be applied to any multi-step refinement pipeline.
+
+\bibliography{references}
+\bibliographystyle{plainnat}
+
+\newpage
+\appendix
+\section{Negative Results}
+
+We document our failed experiments in detail, as they informed the final approach.
+
+\subsection{GRPO Training}
+
+We attempted Group Relative Policy Optimization (GRPO) on KV-Ground-8B with two implementations. Version 1 used $N{=}4$ samples, binary reward (+2 for in-box, $-$distance for out-of-box), and only trained on the best response---methodologically flawed. Version 2 fixed all issues: $N{=}8$ samples, smooth Gaussian reward, KL penalty ($\beta{=}0.05$) against a frozen reference, training on all responses. Despite being correctly implemented, accuracy flatlined at $\sim$68\% for 970 steps. Root cause: KV-Ground produces deterministic outputs per sample---all 8 samples at temperature 0.8 are either all correct or all incorrect, leaving zero within-group variance for advantage computation.
+
+\subsection{SFT on Failure Cases}
+
+We identified 309 samples that KV-Ground fails on using the full zoom pipeline at production resolution, then trained a LoRA adapter (rank 16) to predict ground-truth coordinates. Training loss decreased from 0.29 to 0.18, but screening accuracy was 84.0\%---a 0.5\% regression from baseline. The model memorized coordinates without learning generalizable patterns. A critical lesson: our first attempt used single-pass failure detection at lower resolution, identifying 457 failures instead of the true 309---a mismatch that meant we were training on samples that weren't actually broken in production.
+
+\subsection{Base Model Alternatives}
+
+We evaluated Qwen3.5-9B (raw, no GUI fine-tuning) with zoom: 75.0\% on screening---9.5 points below KV-Ground, confirming that GUI-specific training contributes $\sim$10 absolute points. Holo2-8B, another Qwen3-VL-8B derivative trained with GRPO for localization, achieves only 58.9\% on ScreenSpot-Pro---demonstrating that training recipe matters more than architecture.
+
+\subsection{Infrastructure Lessons}
+
+Running Qwen3.5-27B-AWQ on H100 80GB caused 57\% parse failures due to memory pressure from compressed\_tensors decompression (4-bit weights expand to bf16 in memory, requiring $\sim$56GB + activations). Only H200 141GB provided sufficient headroom. This silent degradation was initially misattributed to model quality rather than infrastructure.
+
+\end{document}

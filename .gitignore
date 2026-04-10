@@ -7,3 +7,8 @@ data/
 dist/
 build/
 .env
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
