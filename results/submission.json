@@ -1,0 +1,176 @@
+{
+  "model_name": "KV-Ground-8B + Qwen3.5-27B Consistency Router",
+  "link": "",
+  "description": "Heterogeneous ensemble of KV-Ground-8B-BaseGuiOwl1.5-0315 and Qwen3.5-27B-AWQ-4bit. Both models run independent 2-step zoom-in pipelines (crop_ratio=0.5). Per sample, the model with lower zoom consistency (step-2 prediction closer to crop center = higher confidence) is selected. KV-Ground selected for 64.9% of samples, Qwen3.5-27B for 35.1%.",
+  "results": {
+    "group": {
+      "CAD": {
+        "icon": 0.5156,
+        "text": 0.8782,
+        "avg": 0.7893
+      },
+      "Creative": {
+        "icon": 0.6224,
+        "text": 0.8535,
+        "avg": 0.7566
+      },
+      "Dev": {
+        "icon": 0.731,
+        "text": 0.9351,
+        "avg": 0.8361
+      },
+      "OS": {
+        "icon": 0.5618,
+        "text": 0.8785,
+        "avg": 0.7347
+      },
+      "Office": {
+        "icon": 0.7547,
+        "text": 0.9492,
+        "avg": 0.9043
+      },
+      "Scientific": {
+        "icon": 0.7091,
+        "text": 0.9375,
+        "avg": 0.8386
+      }
+    },
+    "application": {
+      "android_studio": {
+        "icon": 0.6818,
+        "text": 0.9444,
+        "avg": 0.8
+      },
+      "autocad": {
+        "icon": 0.1429,
+        "text": 0.8519,
+        "avg": 0.7059
+      },
+      "blender": {
+        "icon": 0.7333,
+        "text": 0.8036,
+        "avg": 0.7887
+      },
+      "davinci": {
+        "icon": 0.6087,
+        "text": 0.9048,
+        "avg": 0.75
+      },
+      "eviews": {
+        "icon": 1.0,
+        "text": 0.9302,
+        "avg": 0.94
+      },
+      "excel": {
+        "icon": 0.6923,
+        "text": 0.8824,
+        "avg": 0.8438
+      },
+      "fruitloops": {
+        "icon": 0.3226,
+        "text": 0.7308,
+        "avg": 0.5088
+      },
+      "illustrator": {
+        "icon": 0.7895,
+        "text": 1.0,
+        "avg": 0.871
+      },
+      "inventor": {
+        "icon": 0.2727,
+        "text": 0.9661,
+        "avg": 0.8571
+      },
+      "linux_common": {
+        "icon": 0.5789,
+        "text": 0.8387,
+        "avg": 0.74
+      },
+      "macos_common": {
+        "icon": 0.5652,
+        "text": 0.9286,
+        "avg": 0.8
+      },
+      "matlab": {
+        "icon": 0.8421,
+        "text": 0.9324,
+        "avg": 0.914
+      },
+      "origin": {
+        "icon": 0.5581,
+        "text": 0.9474,
+        "avg": 0.6774
+      },
+      "photoshop": {
+        "icon": 0.72,
+        "text": 0.9615,
+        "avg": 0.8431
+      },
+      "powerpoint": {
+        "icon": 0.76,
+        "text": 0.9825,
+        "avg": 0.9146
+      },
+      "premiere": {
+        "icon": 0.7083,
+        "text": 0.7857,
+        "avg": 0.75
+      },
+      "pycharm": {
+        "icon": 0.7105,
+        "text": 0.9,
+        "avg": 0.8077
+      },
+      "quartus": {
+        "icon": 0.8125,
+        "text": 1.0,
+        "avg": 0.8667
+      },
+      "solidworks": {
+        "icon": 0.5,
+        "text": 0.8571,
+        "avg": 0.7922
+      },
+      "stata": {
+        "icon": 0.7561,
+        "text": 1.0,
+        "avg": 0.7959
+      },
+      "unreal_engine": {
+        "icon": 0.6667,
+        "text": 0.931,
+        "avg": 0.8857
+      },
+      "vivado": {
+        "icon": 0.6875,
+        "text": 0.8125,
+        "avg": 0.7625
+      },
+      "vmware": {
+        "icon": 0.7778,
+        "text": 1.0,
+        "avg": 0.9512
+      },
+      "vscode": {
+        "icon": 0.7273,
+        "text": 0.8788,
+        "avg": 0.8182
+      },
+      "windows_common": {
+        "icon": 0.5532,
+        "text": 0.8529,
+        "avg": 0.679
+      },
+      "word": {
+        "icon": 0.8,
+        "text": 0.971,
+        "avg": 0.9405
+      }
+    },
+    "overall": {
+      "icon": 0.6556,
+      "text": 0.9038,
+      "avg": 0.809
+    }
+  }
+}

@@ -1,0 +1,10 @@
+torch>=2.10
+torchvision
+torchaudio
+transformers>=5.0
+peft
+huggingface_hub
+accelerate
+compressed-tensors>=0.10
+autoawq
+pillow
