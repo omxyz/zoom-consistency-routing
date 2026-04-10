@@ -115,7 +115,7 @@ zoom-consistency-routing/
 ```bibtex
 @article{zoomconsistency2026,
   title={Confidence-Based Model Routing via Zoom Consistency for GUI Grounding},
-  author={},
+  author={Kim, Keon and Chelikavada, Krish},
   year={2026}
 }
 ```

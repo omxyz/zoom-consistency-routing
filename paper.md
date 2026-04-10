@@ -1,5 +1,9 @@
 # Confidence-Based Model Routing via Zoom Consistency for GUI Grounding
 
+**Keon Kim** (keon@omlabs.xyz) and **Krish Chelikavada** (krish@omlabs.xyz)
+
+OM Labs
+
 ## Abstract
 
 GUI grounding — predicting click coordinates from screenshots and natural language instructions — is a critical capability for computer-use agents. Current state-of-the-art approaches use specialized vision-language models (VLMs) with multi-step zoom-in refinement pipelines. We observe that the zoom refinement step contains a free confidence signal: when a model's step-2 prediction lands near the center of the zoomed crop, the model's initial localization was already accurate. We call this signal *zoom consistency* and show it correlates monotonically with prediction correctness. We exploit this signal to build a training-free ensemble router that runs two models (a specialized GUI grounding model and a general-purpose VLM) independently and selects the more confident prediction per sample. On ScreenSpot-Pro, the most challenging GUI grounding benchmark, our method achieves **80.9%** accuracy, establishing a new state of the art without any additional training. The approach requires only inference-time computation and generalizes across applications and UI element types.
