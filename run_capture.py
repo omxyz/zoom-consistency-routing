@@ -83,14 +83,14 @@ def run_kv_capture(ds, indices, out_path):
     print(f"\nDone. {len(results)} samples. Accuracy: {final_acc:.4f}", flush=True)
 
 
-def run_qwen_cross_capture(ds, indices, kv_capture_path, out_path):
-    """Capture Qwen predictions + stage split using existing KV capture data."""
+def run_qwen_cross_capture(ds, indices, kv_capture_path, out_path, model_name="qwen"):
+    """Capture generalist predictions + stage split using existing KV capture data."""
     with open(kv_capture_path) as f:
         kv_data = json.load(f)
     kv_by_idx = {r["idx"]: r for r in kv_data}
     print(f"Loaded {len(kv_data)} KV rows from {kv_capture_path}", flush=True)
 
-    load_model("qwen")
+    load_model(model_name)
     results = []
     n_correct_qwen = 0
     n_correct_stage = 0
@@ -120,7 +120,7 @@ def run_qwen_cross_capture(ds, indices, kv_capture_path, out_path):
 
         # Qwen step 1
         try:
-            qw_s1 = run_vlm("qwen", image, instruction)
+            qw_s1 = run_vlm(model_name, image, instruction)
         except Exception as e:
             print(f"  [{i+1}] qwen s1 error: {e}", flush=True)
             qw_s1 = None
@@ -136,7 +136,7 @@ def run_qwen_cross_capture(ds, indices, kv_capture_path, out_path):
             qw_crop_box = (x1, y1, x2, y2)
 
         try:
-            qw_s2_qwcrop = run_vlm("qwen", qw_crop, instruction) if qw_crop is not None else None
+            qw_s2_qwcrop = run_vlm(model_name, qw_crop, instruction) if qw_crop is not None else None
         except Exception as e:
             qw_s2_qwcrop = None
 
@@ -150,7 +150,7 @@ def run_qwen_cross_capture(ds, indices, kv_capture_path, out_path):
             kv_crop_img = image.crop((kx1, ky1, kx2, ky2)).resize((orig_w, orig_h), Image.LANCZOS)
             kv_crop_box_for_remap = (kx1, ky1, kx2, ky2)
             try:
-                qw_s2_kvcrop = run_vlm("qwen", kv_crop_img, instruction)
+                qw_s2_kvcrop = run_vlm(model_name, kv_crop_img, instruction)
             except Exception as e:
                 qw_s2_kvcrop = None
             kv_crop_img.close()
@@ -212,7 +212,7 @@ def run_qwen_cross_capture(ds, indices, kv_capture_path, out_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True, choices=["kv", "qwen"])
+    ap.add_argument("--model", required=True, choices=["kv", "qwen", "phi4"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--kv-capture", default=None, help="Path to KV capture JSON (required for --model qwen)")
     ap.add_argument("--start", type=int, default=0)
@@ -230,11 +230,12 @@ def main():
 
     if args.model == "kv":
         run_kv_capture(ds, indices, args.out)
-    else:
+    elif args.model in ("qwen", "phi4"):
         if args.kv_capture is None:
-            print("ERROR: --kv-capture required for --model qwen", file=sys.stderr)
+            print(f"ERROR: --kv-capture required for --model {args.model}", file=sys.stderr)
             sys.exit(1)
-        run_qwen_cross_capture(ds, indices, args.kv_capture, args.out)
+        run_qwen_cross_capture(ds, indices, args.kv_capture, args.out,
+                               model_name=args.model)
 
 
 if __name__ == "__main__":

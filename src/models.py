@@ -8,6 +8,7 @@ from PIL import Image
 
 DEFAULT_KV_PATH = os.environ.get("KV_GROUND_PATH", "models/kv-ground-8b")
 DEFAULT_QWEN_PATH = os.environ.get("QWEN_PATH", "models/qwen3.5-27b-awq")
+DEFAULT_PHI4_PATH = os.environ.get("PHI4_PATH", "models/phi4-vision-15b")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 SYSTEM_PROMPT = (
@@ -44,9 +45,12 @@ _models = {}
 
 
 def load_model(name, path=None):
-    """Load a model by name ('kv' or 'qwen'). Cached after first load."""
+    """Load a model by name ('kv', 'qwen', or 'phi4'). Cached after first load."""
     if name in _models:
         return _models[name]
+
+    if name == "phi4":
+        return _load_phi4(path)
 
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -67,9 +71,31 @@ def load_model(name, path=None):
     return model, processor
 
 
+def _load_phi4(path=None):
+    """Load Phi-4-Reasoning-Vision-15B."""
+    from transformers import AutoModelForCausalLM, AutoProcessor
+
+    if path is None:
+        path = DEFAULT_PHI4_PATH
+
+    print(f"Loading phi4 from {path}...", flush=True)
+    processor = AutoProcessor.from_pretrained(path, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        path, trust_remote_code=True,
+        torch_dtype=torch.bfloat16, device_map=DEVICE,
+    )
+    model.eval()
+    _models["phi4"] = (model, processor)
+    print("phi4 loaded.", flush=True)
+    return model, processor
+
+
 def run_vlm(name, image, instruction):
     """Run a named model on an image+instruction.
     Returns (x, y) in 1000x1000 space, or None on parse failure."""
+    if name == "phi4":
+        return _run_phi4(image, instruction)
+
     model, processor = load_model(name)
 
     messages = [
@@ -84,6 +110,30 @@ def run_vlm(name, image, instruction):
         messages, tokenize=True, return_tensors="pt",
         return_dict=True, add_generation_prompt=True,
     ).to(DEVICE)
+
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, max_new_tokens=512, do_sample=False)
+
+    generated = output_ids[0][inputs["input_ids"].shape[1]:]
+    response = processor.tokenizer.decode(generated, skip_special_tokens=True)
+    return parse_tool_call(response)
+
+
+def _run_phi4(image, instruction):
+    """Run Phi-4-Reasoning-Vision on an image+instruction.
+    Returns (x, y) in 1000x1000 space, or None on parse failure."""
+    model, processor = load_model("phi4")
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"<image>\n{instruction}"},
+    ]
+
+    prompt = processor.tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True,
+    )
+
+    inputs = processor(text=prompt, images=[image], return_tensors="pt").to(DEVICE)
 
     with torch.no_grad():
         output_ids = model.generate(**inputs, max_new_tokens=512, do_sample=False)
