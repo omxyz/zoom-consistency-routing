@@ -92,19 +92,22 @@ python analyze.py --input results/qwen_test.json
 ```
 zoom-consistency-routing/
 ├── README.md
-├── paper.md                    # Full paper
 ├── requirements.txt
-├── run_capture.py              # Main capture script (both models)
+├── run_capture.py              # Main capture script (KV, Qwen, Phi-4)
+├── phi4_capture.py             # Standalone Phi-4 capture for RunPod
 ├── analyze.py                  # Offline analysis of all routing strategies
 ├── generate_submission.py      # Generate leaderboard submission JSON
+├── arxiv/
+│   ├── main.tex                # Paper source
+│   ├── main.pdf                # Compiled paper
+│   └── references.bib
 ├── src/
-│   ├── __init__.py
 │   ├── models.py               # Model loading and inference
 │   ├── dataset.py              # ScreenSpot-Pro dataset handling
 │   ├── zoom.py                 # Zoom pipeline and consistency computation
 │   └── strategies.py           # All routing strategies
 ├── scripts/
-│   ├── download_models.py      # Download both models
+│   ├── download_models.py      # Download models
 │   └── download_dataset.py     # Download ScreenSpot-Pro
 └── results/
     ├── kv_capture.json         # Raw KV-Ground predictions (1,581 samples)
