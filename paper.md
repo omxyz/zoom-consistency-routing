@@ -2,7 +2,7 @@
 
 **Keon Kim** (keon@omlabs.xyz) and **Krish Chelikavada** (krish@omlabs.xyz)
 
-OM Labs
+Om Labs
 
 ## Abstract
 
