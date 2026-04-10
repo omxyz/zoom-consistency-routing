@@ -52,7 +52,7 @@ Our contributions:
 \section{Related Work}
 
 \paragraph{GUI Grounding.}
-GUI grounding has evolved from rule-based approaches to VLM-based methods. OS-Atlas~\cite{osatlas} provided early large-scale training data. GUI-Actor~\cite{guiactor} introduced coordinate-free grounding using set-of-mark prompting. UI-TARS~\cite{uitars} scaled to 72B parameters. KV-Ground-8B~\cite{kvground} achieved state-of-the-art results through multi-stage fine-tuning: Qwen3-VL-8B was first trained as GUI-Owl-1.5 on millions of GUI agent samples, then further specialized for coordinate grounding.
+GUI grounding has evolved from rule-based approaches to VLM-based methods. OS-Atlas~\cite{osatlas} provided early large-scale training data. GUI-Actor~\cite{guiactor} introduced coordinate-free grounding using set-of-mark prompting. UI-TARS~\cite{uitars} scaled to 72B parameters. KV-Ground-8B~\cite{kvground} achieved state-of-the-art results through multi-stage fine-tuning: Qwen3-VL-8B was first trained as GUI-Owl-1.5~\cite{guiowl,mplugowl} on millions of GUI agent samples, then further specialized for coordinate grounding.
 
 \paragraph{Zoom-In Strategies.}
 Multi-step zoom-in is a widely adopted strategy for high-resolution GUI grounding. ZoomClick~\cite{zoomclick} systematically evaluated zoom refinement on ScreenSpot-Pro. LASER~\cite{laser} introduced preference optimization for zoom region selection. ScreenSeekeR~\cite{screenseeker} used cascaded visual search with zoom. Our work differs in that we do not propose a new zoom strategy---instead, we extract a confidence signal from existing zoom pipelines.
@@ -61,7 +61,7 @@ Multi-step zoom-in is a widely adopted strategy for high-resolution GUI groundin
 GUI-RC~\cite{guirc} introduced region consistency as a test-time confidence signal, using spatial voting across multiple predictions. Adaptive VLM Routing~\cite{avr} proposed routing between VLMs based on action difficulty estimation. Our approach is simpler: we require no additional sampling, no difficulty estimation, and no training. The confidence signal is a byproduct of the zoom pipeline that models already run.
 
 \paragraph{Test-Time Compute Scaling.}
-Recent work has explored scaling compute at inference time. Adaptive Chain-of-Focus~\cite{adaptivecof} dynamically decides when to zoom. Training-Free Uncertainty Guidance~\cite{uncertaintyguidance} uses model uncertainty to select visual inputs. Our method can be viewed as a minimal form of test-time compute scaling: we run two models instead of one and select the better prediction.
+Recent work has explored scaling compute at inference time. Adaptive Chain-of-Focus~\cite{adaptivecof} dynamically decides when to zoom. AdaZoom-GUI~\cite{adazoomgui} introduced adaptive zoom with instruction refinement. Training-Free Uncertainty Guidance~\cite{uncertaintyguidance} uses model uncertainty to select visual inputs. Reinforcement learning approaches such as GRPO-based visual grounding~\cite{guigrpo} and Holo2~\cite{holo2} have shown promise for improving localization through online RL. Our method can be viewed as a minimal form of test-time compute scaling: we run two models instead of one and select the better prediction.
 
 \section{Method}
 
@@ -113,7 +113,7 @@ We pair two models with complementary strengths:
 \section{Experimental Setup}
 
 \paragraph{Benchmark.}
-We evaluate on \textbf{ScreenSpot-Pro}~\cite{li2025screenspotpro}, the most challenging GUI grounding benchmark. It contains 1,581 samples across 26 professional applications, 6 industry categories (CAD, Creative, Dev, Office, OS, Scientific), and 3 operating systems. Each sample consists of a high-resolution screenshot, a natural language instruction, and a bounding box annotation. Accuracy is measured as point-in-box: whether the predicted coordinate falls within the annotated bounding box.
+We evaluate on \textbf{ScreenSpot-Pro}~\cite{li2025screenspotpro,screenspotpro_repo}, the most challenging GUI grounding benchmark. It contains 1,581 samples across 26 professional applications, 6 industry categories (CAD, Creative, Dev, Office, OS, Scientific), and 3 operating systems. Each sample consists of a high-resolution screenshot, a natural language instruction, and a bounding box annotation. Accuracy is measured as point-in-box: whether the predicted coordinate falls within the annotated bounding box.
 
 \paragraph{Implementation Details.}
 KV-Ground-8B uses \texttt{vocaela/KV-Ground-8B-BaseGuiOwl1.5-0315} loaded in bf16 with no resolution cap (\texttt{max\_pixels}$=99{,}999{,}999$). Qwen3.5-27B uses \texttt{cyankiwi/Qwen3.5-27B-AWQ-4bit} loaded via compressed\_tensors. Both use SDPA attention. The zoom pipeline uses 2 steps with \texttt{crop\_ratio}$=0.5$ and greedy decoding (temperature$=0$). All experiments run on NVIDIA H200 141GB.
