@@ -30,7 +30,7 @@
 \maketitle
 
 \begin{abstract}
-Multi-step zoom-in pipelines are widely used for GUI grounding, yet the intermediate predictions they produce are typically discarded after coordinate remapping. We observe that these intermediate outputs contain a useful confidence signal for free: \emph{zoom consistency}, the distance between a model's step-2 prediction and the crop center. We prove this quantity is a linear estimator of step-1 spatial error under idealized conditions (perfect step-2, target within crop) and show it correlates significantly with prediction correctness across two architecturally different VLMs (Spearman $\rho = -0.14$, $p < 10^{-6}$ for KV-Ground-8B; $\rho = -0.11$, $p = 0.0003$ for Qwen3.5-27B). Because zoom consistency is a geometric quantity in a shared coordinate space, it is directly comparable across models without calibration, unlike log-probabilities or token-level uncertainty. We validate the signal on 1,581 samples from ScreenSpot-Pro and demonstrate one application: using zoom consistency to route between a specialist and generalist model, capturing 16.5\% of the oracle headroom between them (+0.8\%, McNemar $p = 0.19$). The signal is simple, requires no training or extra forward passes, and applies to any pipeline that refines predictions through iterative cropping. Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
+Multi-step zoom-in pipelines are widely used for GUI grounding, yet the intermediate predictions they produce are typically discarded after coordinate remapping. We observe that these intermediate outputs contain a useful confidence signal for free: \emph{zoom consistency}, the distance between a model's step-2 prediction and the crop center. Unlike log-probabilities or token-level uncertainty, zoom consistency is a geometric quantity in a shared coordinate space, making it directly comparable across architecturally different VLMs without calibration. We prove this quantity is a linear estimator of step-1 spatial error under idealized conditions (perfect step-2, target within crop) and show it correlates with prediction correctness across two VLMs (AUC $= 0.60$; Spearman $\rho = -0.14$, $p < 10^{-6}$ for KV-Ground-8B; $\rho = -0.11$, $p = 0.0003$ for Qwen3.5-27B). The correlation is small but consistent across models, application categories, and operating systems. As a proof-of-concept, we use zoom consistency to route between a specialist and generalist model, capturing 16.5\% of the oracle headroom between them (+0.8\%, McNemar $p = 0.19$). Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
 \end{abstract}
 
 \section{Introduction}
@@ -102,18 +102,6 @@ Let $M_A$ and $M_B$ be VLMs with different tokenizers $\mathcal{T}_A, \mathcal{T
 
 This property arises because zoom consistency is a geometric quantity in the shared $1000\times1000$ coordinate space that both models output into. The comparison $c_A < c_B$ is a statement about Euclidean distances, independent of how each model internally represents coordinates. This assumes both models use the same crop ratio $r$ and coordinate normalization, which is standard in zoom pipelines. Under this assumption, zoom consistency is immediately usable for cross-model decisions without any calibration step.
 
-\subsection{Coverage-Magnification Trade-off}
-
-\begin{proposition}[Optimal Crop Ratio]\label{prop:crop}
-Let $\boldsymbol{\varepsilon}_1 \sim \mathcal{N}(\mathbf{0}, \sigma^2 \mathbf{I}_2)$. The probability the target lies within the crop is:
-\begin{equation}
-P_{\mathrm{in}}(r, \sigma) = \left[2\Phi\!\left(\frac{r}{2\sigma}\right) - 1\right]^2
-\end{equation}
-The effective magnification $P_{\mathrm{in}}/r$ is maximized at $r^* = 2.80\sigma$, with $P_{\mathrm{in}}(r^*) = 70.3\%$.
-\end{proposition}
-
-For $\sigma = 0.05$ (typical for strong grounding models), $r = 0.5$ provides $5\sigma$ coverage ($P_{\text{in}} \approx 100\%$) with $2\times$ magnification. An aggressive $r = 0.3$ gives $3.3\times$ magnification but risks 0.5\% target loss.
-
 \section{Empirical Validation}
 
 \subsection{Setup}
@@ -122,7 +110,7 @@ For $\sigma = 0.05$ (typical for strong grounding models), $r = 0.5$ provides $5
 ScreenSpot-Pro~\cite{li2025screenspotpro,screenspotpro_repo}: 1,581 samples across professional desktop applications spanning 3 operating systems. Accuracy metric: point-in-bounding-box.
 
 \paragraph{Models.}
-We evaluate zoom consistency on two architecturally different VLMs: KV-Ground-8B~\cite{kvground} (specialist, bf16, Qwen2.5-VL-based, max\_pixels $= 99$M) and Qwen3.5-27B~\cite{qwen35} (generalist, AWQ-4bit via compressed\_tensors). Both use 2-step zoom with $r = 0.5$ and greedy decoding. Hardware: NVIDIA H200 141GB.
+We evaluate zoom consistency on two architecturally different VLMs: KV-Ground-8B~\cite{kvground}, a GUI grounding specialist fine-tuned from GUI-Owl-1.5~\cite{guiowl} (8B parameters, bf16, max\_pixels $= 99$M), and Qwen3.5-27B~\cite{qwen35}, a general-purpose VLM (AWQ-4bit via compressed\_tensors). Both use 2-step zoom with $r = 0.5$ and greedy decoding. Hardware: NVIDIA H200 141GB.
 
 \paragraph{Qwen accuracy note.} Our Qwen3.5-27B achieves 60.9\% on ScreenSpot-Pro. The official Qwen evaluation reports 70.3\% for the full-precision model. The gap is likely attributable to 4-bit AWQ quantization and differences in prompting format. We use the quantized variant because full-precision 27B exceeds single-GPU memory alongside KV-Ground-8B.
 
@@ -137,12 +125,13 @@ We evaluate zoom consistency on two architecturally different VLMs: KV-Ground-8B
 \textbf{Model} & \textbf{AUC} & \textbf{Spearman $\rho$} & \textbf{$p$-value} & \textbf{$n$} \\
 \midrule
 KV-Ground-8B & 0.600 & $-0.139$ & $< 10^{-6}$ & 1,581 \\
+KV-Ground-8B$^\dagger$ & 0.599 & $-0.123$ & $4 \times 10^{-5}$ & 1,097 \\
 Qwen3.5-27B & 0.588 & $-0.109$ & $0.0003$ & 1,097 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The AUC exceeds 0.5 (random) for both models, confirming zoom consistency carries discriminative information about prediction correctness. The correlation is consistent across both models and stable under cross-validation: splitting the KV-Ground data into random halves yields $\rho = -0.118$ ($p = 9 \times 10^{-4}$) and $\rho = -0.161$ ($p = 5 \times 10^{-6}$). The Qwen sample count ($n = 1{,}097$) is smaller than the full benchmark because 484 samples produced unparseable coordinate outputs under AWQ-4bit quantization (88\% failed at step-1). These are not random: they concentrate in CAD applications (69\% failure rate) and correspond to harder samples where KV-Ground also struggles (69\% accuracy vs.\ 85\% on parseable samples). The Qwen correlation is therefore measured on an easier subset, and the true signal strength on the full distribution may be weaker.
+The AUC exceeds 0.5 (random) for both models, confirming zoom consistency carries discriminative information about prediction correctness. The $^\dagger$ row shows KV-Ground evaluated on the same 1,097-sample subset as Qwen for an apples-to-apples comparison; AUC and $\rho$ remain similar, confirming the signal is not an artifact of sample selection. The correlation is stable under cross-validation: splitting the KV-Ground data into random halves yields $\rho = -0.118$ ($p = 9 \times 10^{-4}$) and $\rho = -0.161$ ($p = 5 \times 10^{-6}$). The Qwen sample count ($n = 1{,}097$) is smaller than the full benchmark because 484 samples produced unparseable coordinate outputs under AWQ-4bit quantization (88\% failed at step-1). These are not random: they concentrate in CAD applications (69\% failure rate) and correspond to harder samples where KV-Ground also struggles (69\% accuracy vs.\ 85\% on parseable samples). The Qwen correlation is therefore measured on an easier subset, and the true signal strength on the full distribution may be weaker.
 
 \begin{table}[h]
 \centering
@@ -205,7 +194,7 @@ OS & 196 & 70.9\% & 42.9\% \\
 \end{tabular}
 \end{table}
 
-The consistency signal reflects domain familiarity without any category labels. On CAD applications, where KV-Ground was specifically trained, the specialist's consistency is almost always lower (Qwen is preferred only 13.4\% of the time). On consumer interfaces (Office, OS), the generalist's consistency is competitive (42--47\%), reflecting Qwen's broader pretraining coverage.
+The consistency signal reflects domain familiarity without any category labels. On CAD applications, where KV-Ground's accuracy is highest, the specialist's consistency is almost always lower (Qwen is preferred only 13.4\% of the time). On consumer interfaces (Office, OS), the generalist's consistency is competitive (42--47\%), reflecting Qwen's broader pretraining coverage.
 
 The signal also holds across all three operating systems in the benchmark: Spearman $\rho = -0.115$ on macOS ($n = 604$), $\rho = -0.114$ on Windows ($n = 927$), and $\rho = -0.152$ on Linux ($n = 50$). The consistency gap between correct and incorrect predictions is present on every platform.
 
@@ -240,7 +229,7 @@ def route(image, instruction):
     pred_B, c_B = zoom_pipeline(generalist, image, instruction)
     return pred_A if c_A <= c_B else pred_B
 \end{lstlisting}
-\caption{Zoom consistency routing requires no additional forward passes beyond the zoom pipelines themselves. The consistency $c$ (line 5) is extracted from the pipeline's existing intermediate output.}
+\caption{Listing: Zoom consistency routing. The consistency $c$ (line 5) is extracted from the pipeline's existing intermediate output. No additional forward passes are needed beyond the zoom pipelines themselves.}
 \label{fig:pseudocode}
 \end{figure}
 
