@@ -7,6 +7,7 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{xcolor}
+\usepackage{listings}
 
 \newtheorem{proposition}{Proposition}
 \newtheorem{theorem}{Theorem}
@@ -93,6 +94,42 @@ Let $M_A$ and $M_B$ be VLMs with different tokenizers $\mathcal{T}_A, \mathcal{T
 This comparability is what enables the uncalibrated routing rule $\arg\min_i c_i$: both models output predictions in the same $1000\times1000$ coordinate space, so the consistency comparison is a geometric operation in shared units.
 
 \subsection{Routing and Oracle Extraction}
+
+The full procedure is shown below.
+
+\lstset{
+  basicstyle=\small\ttfamily,
+  frame=single,
+  xleftmargin=1em,
+  framexleftmargin=0.5em,
+  numbers=left,
+  numberstyle=\tiny,
+  escapeinside={(*}{*)},
+  columns=fullflexible,
+  keepspaces=true
+}
+
+\begin{figure}[h]
+\begin{lstlisting}
+def zoom_pipeline(model, image, instruction, r=0.5):
+    p1 = model(image, instruction)       # step 1: predict on full image
+    crop = crop_and_resize(image, center=p1, ratio=r)
+    p2 = model(crop, instruction)        # step 2: predict on zoomed crop
+    c = distance(p2, (500, 500))         # zoom consistency
+    final = remap(p2, crop_box)          # map back to image coords
+    return final, c
+
+def route(image, instruction):
+    pred_A, c_A = zoom_pipeline(specialist, image, instruction)
+    pred_B, c_B = zoom_pipeline(generalist, image, instruction)
+    if c_A <= c_B:                       # pick more self-consistent
+        return pred_A
+    else:
+        return pred_B
+\end{lstlisting}
+\caption{Zoom consistency routing. Each model runs its own 2-step zoom pipeline. The zoom consistency $c$ (line 4) measures how far step-2 deviates from the crop center. The router (line 12) selects the model with lower $c$.}
+\label{fig:pseudocode}
+\end{figure}
 
 Given models $M_A$ (specialist, accuracy $a_A$) and $M_B$ (generalist, accuracy $a_B < a_A$), partition the $N$ samples into $\mathcal{S}_{11}$ (both correct, $n_{11}$), $\mathcal{S}_{10}$ (only $A$, $n_{10}$), $\mathcal{S}_{01}$ (only $B$, $n_{01}$), $\mathcal{S}_{00}$ (both wrong, $n_{00}$). The oracle achieves $(n_{11} + n_{10} + n_{01})/N$. The \emph{oracle headroom} is $n_{01}/N$: samples only $B$ gets right.
 
