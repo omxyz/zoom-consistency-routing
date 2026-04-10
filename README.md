@@ -1,8 +1,8 @@
 # Zoom Consistency Routing
 
-**Confidence-Based Model Routing via Zoom Consistency for GUI Grounding**
+**Zoom Consistency: A Free Confidence Signal in Multi-Step Visual Grounding Pipelines**
 
-A training-free ensemble method that achieves **80.9%** on ScreenSpot-Pro, establishing a new state of the art.
+Multi-step zoom-in pipelines contain a free confidence signal: the distance between a model's step-2 prediction and the crop center. We formalize this as *zoom consistency*, prove it estimates step-1 spatial error, and show it enables training-free cross-model routing on ScreenSpot-Pro.
 
 ## Method
 
@@ -107,14 +107,16 @@ zoom-consistency-routing/
 │   ├── download_models.py      # Download both models
 │   └── download_dataset.py     # Download ScreenSpot-Pro
 └── results/
-    └── submission.json         # Our submission (80.9%)
+    ├── kv_capture.json         # Raw KV-Ground predictions (1,581 samples)
+    ├── qwen_cross_capture.json # Raw Qwen predictions + cross-model data
+    └── submission.json         # Leaderboard submission (80.9%)
 ```
 
 ## Citation
 
 ```bibtex
 @article{zoomconsistency2026,
-  title={Confidence-Based Model Routing via Zoom Consistency for GUI Grounding},
+  title={Zoom Consistency: A Free Confidence Signal in Multi-Step Visual Grounding Pipelines},
   author={Kim, Keon and Chelikavada, Krish},
   year={2026}
 }
