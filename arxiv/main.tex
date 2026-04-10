@@ -1,12 +1,16 @@
 \documentclass{article}
 \usepackage{arxiv}
-\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
 \usepackage{natbib}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{xcolor}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
 
 \title{Confidence-Based Model Routing via Zoom Consistency for GUI Grounding}
 
@@ -25,319 +29,295 @@
 \maketitle
 
 \begin{abstract}
-GUI grounding, the task of predicting click coordinates from screenshots and natural language instructions, is a critical capability for computer-use agents. Current state-of-the-art approaches use specialized vision-language models (VLMs) with multi-step zoom-in refinement pipelines. We observe that the zoom refinement step contains a free confidence signal: when a model's step-2 prediction lands near the center of the zoomed crop, the model's initial localization was already accurate. We call this signal \emph{zoom consistency} and show it correlates monotonically with prediction correctness. We use this signal to route between a specialized GUI grounding model and a general-purpose VLM, selecting the more confident prediction per sample without any training. On ScreenSpot-Pro, our method achieves \textbf{80.9\%} accuracy, a new state of the art. Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
+When two vision-language models (VLMs) are applied to GUI grounding, an oracle that always selects the correct model achieves 85.1\% on ScreenSpot-Pro, 5 points above the best single model (80.1\%). How much of this oracle headroom can be captured without training? We observe that multi-step zoom-in pipelines contain a free confidence signal: \emph{zoom consistency}, the distance between a model's step-2 prediction and the crop center. We prove this quantity is proportional to step-1 spatial error and show it correlates significantly with prediction correctness (Spearman $\rho = -0.14$, $p < 10^{-6}$). Using zoom consistency to route between a specialized model (KV-Ground-8B) and a general-purpose model (Qwen3.5-27B), we capture 16.5\% of the oracle headroom, achieving 80.9\% on ScreenSpot-Pro. We derive conditions under which consistency-based routing provably improves over the stronger model alone, and show that the current capture rate is limited by the generalist model's accuracy. Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
 \end{abstract}
 
 \section{Introduction}
 
-GUI grounding is the task of identifying the pixel coordinates of a UI element described by a natural language instruction in a screenshot. It is a foundational capability for autonomous computer-use agents. Recent benchmarks like ScreenSpot-Pro~\cite{li2025screenspotpro} evaluate this capability on professional software (CAD tools, IDEs, video editors) with high-resolution screenshots.
+GUI grounding is the task of predicting click coordinates for a UI element described by a natural language instruction in a screenshot. The current best approach on ScreenSpot-Pro~\cite{li2025screenspotpro} uses KV-Ground-8B~\cite{kvground}, a specialized VLM with a 2-step zoom-in strategy, achieving 80.5\% accuracy.
 
-The current best approach on ScreenSpot-Pro uses KV-Ground-8B~\cite{kvground}, a specialized VLM combined with a 2-step zoom-in strategy: predict a rough location on the full screenshot, crop and resize around that prediction, then re-predict on the zoomed view for refinement. This achieves 80.5\% accuracy.
+Different VLMs fail on different samples. KV-Ground-8B excels on professional tools (CAD, IDEs), while Qwen3.5-27B~\cite{qwen35}, a general-purpose VLM, occasionally succeeds on consumer interfaces where the specialist fails. An oracle that always picks the correct model achieves 85.1\% on ScreenSpot-Pro, revealing 5 percentage points of untapped potential. The question is: how much of this oracle headroom can be captured at inference time, without training a router?
 
-We make three observations:
+We address this question through \emph{zoom consistency}, a confidence signal embedded in multi-step zoom-in pipelines. When a model's step-2 prediction on a zoomed crop lands near the crop center, the model's initial localization was already accurate. When step-2 predicts far from center, step-1 was off. We formalize this signal, prove it is proportional to step-1 spatial error (Proposition~\ref{prop:linear}), and show it enables cross-model comparison without calibration (Proposition~\ref{prop:calibration}).
 
-\textbf{First}, the zoom refinement step contains a natural confidence signal. When the model's step-2 prediction is close to the center of the zoomed crop, step-1 was already accurate and the zoom merely confirmed it. When step-2 points far from the crop center, step-1 was off, and step-2 is attempting a large correction that often fails. We formalize this as \emph{zoom consistency}.
-
-\textbf{Second}, different VLMs have complementary failure modes. A specialized model like KV-Ground-8B excels on professional engineering tools, while a general-purpose model like Qwen3.5-27B~\cite{qwen35} occasionally succeeds on consumer interfaces where the specialist fails. An oracle that always picks the correct model achieves 85.1\%, revealing 5 percentage points of untapped potential.
-
-\textbf{Third}, zoom consistency enables training-free routing between models. By running both models independently and selecting the one with lower zoom consistency per sample, we capture a portion of this complementary potential without any additional training or labeled routing data.
+Using zoom consistency to route between KV-Ground-8B and Qwen3.5-27B, we capture 16.5\% of the oracle headroom (13 of 79 recoverable samples), achieving 80.9\%. We derive the necessary and sufficient condition for this routing to improve over the stronger model alone (Theorem~\ref{thm:routing}), and analyze why the capture rate is bounded by the generalist's standalone accuracy.
 
 Our contributions:
 \begin{enumerate}
-    \item We identify \emph{zoom consistency} as a free, per-sample confidence signal inherent to multi-step zoom-in pipelines for GUI grounding.
-    \item We validate that zoom consistency correlates monotonically with prediction accuracy across 1,581 professional GUI samples.
-    \item We propose a training-free heterogeneous ensemble that routes between a specialized and a general-purpose VLM using zoom consistency, achieving 80.9\% on ScreenSpot-Pro.
+    \item We formalize zoom consistency as a confidence signal and prove it is a linear estimator of step-1 spatial error (Proposition~\ref{prop:linear}).
+    \item We derive the routing condition: the router improves iff its precision on the disagreement set exceeds $1/2$ (Theorem~\ref{thm:routing}).
+    \item We validate the signal statistically (Spearman $\rho = -0.14$, $p < 10^{-6}$) and measure its oracle extraction rate (16.5\%) on 1,581 samples.
 \end{enumerate}
 
 \section{Related Work}
 
 \paragraph{GUI Grounding.}
-GUI grounding has evolved from rule-based approaches to VLM-based methods. SeeClick~\cite{seeclick} established the first realistic GUI grounding benchmark. OS-Atlas~\cite{osatlas} and UGround~\cite{uground} provided large-scale training data across platforms. GUI-Actor~\cite{guiactor} introduced coordinate-free grounding using set-of-mark prompting. UI-TARS~\cite{uitars} scaled to 72B parameters. MEGA-GUI~\cite{megagui} proposed multi-stage coarse-to-fine grounding. KV-Ground-8B~\cite{kvground} achieved state-of-the-art results through multi-stage fine-tuning: Qwen3-VL-8B was first trained as GUI-Owl-1.5~\cite{guiowl,mplugowl} on millions of GUI agent samples, then further specialized for coordinate grounding.
+SeeClick~\cite{seeclick} established the first realistic GUI grounding benchmark. OS-Atlas~\cite{osatlas} and UGround~\cite{uground} provided large-scale training data. GUI-Actor~\cite{guiactor} introduced coordinate-free grounding. UI-TARS~\cite{uitars} scaled to 72B parameters. MEGA-GUI~\cite{megagui} proposed multi-stage coarse-to-fine grounding. KV-Ground-8B~\cite{kvground} achieved state-of-the-art results through multi-stage fine-tuning from GUI-Owl-1.5~\cite{guiowl,mplugowl}.
 
 \paragraph{Zoom-In Strategies.}
-Multi-step zoom-in is a widely adopted strategy for high-resolution GUI grounding. ZoomClick~\cite{zoomclick} systematically evaluated zoom refinement on ScreenSpot-Pro. LASER~\cite{laser} introduced preference optimization for zoom region selection. ScreenSeekeR~\cite{screenseeker} used cascaded visual search with zoom. AdaZoom-GUI~\cite{adazoomgui} introduced adaptive zoom with instruction refinement. GUI-G$^2$~\cite{guig2} proposed Gaussian reward modeling for zoom-based grounding RL. We do not propose a new zoom strategy. We extract a confidence signal from existing zoom pipelines.
+ZoomClick~\cite{zoomclick} systematically evaluated zoom refinement. LASER~\cite{laser} introduced preference optimization for zoom region selection. ScreenSeekeR~\cite{screenseeker} used cascaded visual search. AdaZoom-GUI~\cite{adazoomgui} proposed adaptive zoom with instruction refinement. GUI-G$^2$~\cite{guig2} used Gaussian reward modeling for zoom-based grounding RL.
 
 \paragraph{Confidence Estimation and Model Routing.}
-GUI-RC~\cite{guirc} introduced region consistency as a test-time confidence signal, using spatial voting across multiple predictions. Adaptive VLM Routing~\cite{avr} proposed routing between VLMs based on action difficulty estimation. Training-Free Uncertainty Guidance~\cite{uncertaintyguidance} uses model uncertainty to select visual inputs. Adaptive Chain-of-Focus~\cite{adaptivecof} dynamically decides when to zoom. Our approach requires no additional sampling, no difficulty estimation, and no training. The confidence signal is a byproduct of the zoom pipeline that models already run.
+GUI-RC~\cite{guirc} introduced region consistency via spatial voting across multiple samples. Adaptive VLM Routing~\cite{avr} proposed routing based on action difficulty estimation. Training-Free Uncertainty Guidance~\cite{uncertaintyguidance} uses model uncertainty for visual input selection. Adaptive Chain-of-Focus~\cite{adaptivecof} dynamically decides when to zoom. Our approach extracts confidence from the existing zoom pipeline with no additional forward passes.
 
 \section{Method}
 
 \subsection{Background: 2-Step Zoom-In Pipeline}
 
-Given a screenshot $I$ of size $W \times H$ and a natural language instruction $q$, the standard zoom-in pipeline works as follows:
-
-\textbf{Step 1.} Run the VLM on the full image to obtain a rough prediction $\hat{p}_1 = (x_1, y_1)$ in a normalized $1000\times1000$ coordinate space.
-
-\textbf{Step 2.} Compute a crop box centered on $\hat{p}_1$ with crop ratio $r$ (typically 0.5), crop the image, resize the crop back to the original resolution, and re-run the VLM to obtain $\hat{p}_2 = (x_2, y_2)$ in the crop's $1000\times1000$ space.
-
-\textbf{Step 3.} Remap $\hat{p}_2$ from crop coordinates back to full-image coordinates to produce the final prediction.
+Given a screenshot $I$ of size $W \times H$ and instruction $q$, the VLM predicts $\hat{p}_1 = (x_1, y_1)$ in a $1000\times1000$ coordinate space. A crop of side $r \cdot 1000$ centered at $\hat{p}_1$ is resized back to $1000\times1000$, and the VLM predicts $\hat{p}_2 = (x_2, y_2)$ in the crop's space. The coordinate mapping from original to crop space is $\phi(\mathbf{q}) = (\mathbf{q} - \hat{p}_1)/r + \mathbf{m}$, where $\mathbf{m} = (500, 500)$.
 
 \subsection{Zoom Consistency}
 
-We define \emph{zoom consistency} as the Euclidean distance between the step-2 prediction and the center of the crop in the model's coordinate space:
+We define \emph{zoom consistency} as:
 \begin{equation}
-    c = \sqrt{(x_2 - 500)^2 + (y_2 - 500)^2}
-\end{equation}
-where $(x_2, y_2)$ is the step-2 prediction in the $1000\times1000$ crop space, and $(500, 500)$ is the crop center.
-
-\textbf{Intuition.} After cropping around $\hat{p}_1$, the predicted location should be near the center of the crop if $\hat{p}_1$ was accurate. A low $c$ (close to center) indicates step-1 was already correct, and step-2 merely confirms it. A high $c$ (far from center) indicates step-1 was off, and step-2 is attempting a large spatial correction.
-
-\textbf{Key property:} Zoom consistency is \emph{free}: it requires no additional model calls, no sampling, no temperature variation. It is computed from values already produced by the standard pipeline.
-
-\subsection{Consistency-Based Routing}
-
-Given two models $M_A$ (specialist) and $M_B$ (generalist), the routing procedure is:
-
-\begin{enumerate}
-    \item Run $M_A$'s full 2-step zoom pipeline $\rightarrow$ prediction $\hat{p}_A$, consistency $c_A$
-    \item Run $M_B$'s full 2-step zoom pipeline $\rightarrow$ prediction $\hat{p}_B$, consistency $c_B$
-    \item Select the final prediction:
-\end{enumerate}
-\begin{equation}
-    \hat{p} = \begin{cases} \hat{p}_A & \text{if } c_A \leq c_B \\ \hat{p}_B & \text{otherwise} \end{cases}
+    c = \|\hat{p}_2 - \mathbf{m}\|_2 = \sqrt{(x_2 - 500)^2 + (y_2 - 500)^2}
 \end{equation}
 
-No training is required. No threshold tuning is needed. The router picks whichever model is more self-consistent in its zoom refinement.
+\begin{proposition}[Zoom Consistency as Linear Error Estimator]\label{prop:linear}
+Let $\mathbf{t}$ be the true target and $\hat{p}_1 = \mathbf{t} + \boldsymbol{\varepsilon}_1$ be the step-1 prediction with error $\boldsymbol{\varepsilon}_1$. If the target lies within the crop and step-2 perfectly identifies the target ($\hat{p}_2 = \phi(\mathbf{t})$), then:
+\begin{equation}
+    c = \frac{\|\boldsymbol{\varepsilon}_1\|_2}{r}
+\end{equation}
+\end{proposition}
 
-\subsection{Model Selection}
+\begin{proof}
+Under perfect step-2, $\hat{p}_2 = \phi(\mathbf{t}) = (\mathbf{t} - \hat{p}_1)/r + \mathbf{m} = -\boldsymbol{\varepsilon}_1/r + \mathbf{m}$. Therefore $\hat{p}_2 - \mathbf{m} = -\boldsymbol{\varepsilon}_1/r$ and $c = \|\boldsymbol{\varepsilon}_1\|/r$.
+\end{proof}
 
-We pair two models with complementary strengths:
+For $r = 0.5$, the crop magnifies step-1 error by $2\times$: a consistency of $c = 100$ corresponds to step-1 error of 50 pixels (5\% of image). The linear relationship breaks when: (i) the target is outside the crop ($\|\boldsymbol{\varepsilon}_1\|_\infty > r \cdot 500$), (ii) step-2 has its own error $\boldsymbol{\varepsilon}_2$, adding noise $|c - \|\boldsymbol{\varepsilon}_1\|/r| \leq \|\boldsymbol{\varepsilon}_2\|$, or (iii) the crop is clipped at image boundaries.
 
-\textbf{KV-Ground-8B} (specialist): A Qwen3-VL-8B model fine-tuned through GUI-Owl-1.5 on millions of GUI screenshots, then further specialized for coordinate grounding. Strong on professional tools (CAD, IDEs, creative software).
+\begin{proposition}[Cross-Model Comparability]\label{prop:calibration}
+Let $M_A$ and $M_B$ be VLMs with different tokenizers $\mathcal{T}_A, \mathcal{T}_B$. Their zoom consistency values $c_A, c_B \in [0, 500\sqrt{2}]$ are directly comparable without calibration. In contrast, log-probability scores $\ell_A, \ell_B$ depend on token count ($L_A \neq L_B$ for identical coordinate strings), softmax temperature, and vocabulary size, requiring per-model calibration functions $g_i: \mathbb{R} \to [0,1]$ learned on held-out data.
+\end{proposition}
 
-\textbf{Qwen3.5-27B} (generalist): A recent unified multimodal model with strong general visual understanding. It is not fine-tuned for GUI grounding specifically, but occasionally succeeds where KV-Ground fails, particularly on consumer/OS interfaces.
+This comparability is what enables the uncalibrated routing rule $\arg\min_i c_i$: both models output predictions in the same $1000\times1000$ coordinate space, so the consistency comparison is a geometric operation in shared units.
+
+\subsection{Routing and Oracle Extraction}
+
+Given models $M_A$ (specialist, accuracy $a_A$) and $M_B$ (generalist, accuracy $a_B < a_A$), partition the $N$ samples into $\mathcal{S}_{11}$ (both correct, $n_{11}$), $\mathcal{S}_{10}$ (only $A$, $n_{10}$), $\mathcal{S}_{01}$ (only $B$, $n_{01}$), $\mathcal{S}_{00}$ (both wrong, $n_{00}$). The oracle achieves $(n_{11} + n_{10} + n_{01})/N$. The \emph{oracle headroom} is $n_{01}/N$: samples only $B$ gets right.
+
+\begin{theorem}[Routing Improvement Condition]\label{thm:routing}
+A consistency-based router that selects $\arg\min_i c_i$ improves over $M_A$ alone if and only if:
+\begin{equation}
+    \underbrace{f_{01} \cdot n_{01}}_{\text{gains}} > \underbrace{(1 - f_{10}) \cdot n_{10}}_{\text{losses}}
+\end{equation}
+where $f_{10} = P(\text{router picks } A \mid \mathcal{S}_{10})$ and $f_{01} = P(\text{router picks } B \mid \mathcal{S}_{01})$. Equivalently, the router's precision in selecting $B$ on the disagreement set $\mathcal{D} = \mathcal{S}_{10} \cup \mathcal{S}_{01}$ must exceed $1/2$.
+\end{theorem}
+
+\begin{proof}
+The router's accuracy is $a_{\text{rt}} = (n_{11} + f_{10} n_{10} + f_{01} n_{01})/N$. The condition $a_{\text{rt}} > a_A = (n_{11} + n_{10})/N$ reduces to $f_{01} n_{01} > (1 - f_{10}) n_{10}$, i.e., gains exceed losses. Setting $g = f_{01} n_{01}$, $\ell = (1-f_{10}) n_{10}$, the condition $g > \ell$ is $g/(g+\ell) > 1/2$.
+\end{proof}
+
+\begin{corollary}
+The base rate of $\mathcal{S}_{01}$ in $\mathcal{D}$ is $\pi = n_{01}/(n_{10} + n_{01})$. The router requires a precision lift of at least $(1/2)/\pi$ over the base rate. In the observed data ($n_{10} = 304$, $n_{01} = 79$, $\pi = 0.206$), precision must exceed $2.4\times$ the base rate.
+\end{corollary}
+
+We define the \emph{oracle extraction rate} as the fraction of oracle headroom captured: $\eta = \text{net gain} / n_{01}$. A perfect router achieves $\eta = 1$; the consistency router achieves $\eta = 13/79 = 16.5\%$.
+
+\subsection{Optimal Crop Ratio}
+
+\begin{proposition}[Coverage-Magnification Trade-off]\label{prop:crop}
+Let $\boldsymbol{\varepsilon}_1 \sim \mathcal{N}(\mathbf{0}, \sigma^2 \mathbf{I}_2)$. The probability the target lies within the crop is:
+\begin{equation}
+P_{\mathrm{in}}(r, \sigma) = \left[2\Phi\!\left(\frac{r}{2\sigma}\right) - 1\right]^2
+\end{equation}
+The effective magnification $P_{\mathrm{in}}/r$ is maximized at $r^* = 2.80\sigma$, with $P_{\mathrm{in}}(r^*) = 70.3\%$.
+\end{proposition}
+
+For $\sigma = 0.05$ (typical for strong grounding models), $r = 0.5$ provides $5\sigma$ coverage ($P_{\text{in}} \approx 100\%$) with $2\times$ magnification. An aggressive $r = 0.3$ gives $3.3\times$ magnification with $0.5\%$ target loss.
 
 \section{Experimental Setup}
 
 \paragraph{Benchmark.}
-We evaluate on \textbf{ScreenSpot-Pro}~\cite{li2025screenspotpro,screenspotpro_repo}, the most challenging GUI grounding benchmark. It contains 1,581 samples across 26 professional applications, 6 industry categories (CAD, Creative, Dev, Office, OS, Scientific), and 3 operating systems. Each sample consists of a high-resolution screenshot, a natural language instruction, and a bounding box annotation. Accuracy is measured as point-in-box: whether the predicted coordinate falls within the annotated bounding box.
+ScreenSpot-Pro~\cite{li2025screenspotpro,screenspotpro_repo}: 1,581 samples across 26 professional applications, 6 categories, 3 operating systems. Accuracy: point-in-box.
 
-\paragraph{Implementation Details.}
-KV-Ground-8B uses \texttt{vocaela/KV-Ground-8B-BaseGuiOwl1.5-0315} loaded in bf16 with no resolution cap (\texttt{max\_pixels}$=99{,}999{,}999$). Qwen3.5-27B uses \texttt{cyankiwi/Qwen3.5-27B-AWQ-4bit} loaded via compressed\_tensors. Both use SDPA attention. The zoom pipeline uses 2 steps with \texttt{crop\_ratio}$=0.5$ and greedy decoding (temperature$=0$). All experiments run on NVIDIA H200 141GB.
+\paragraph{Models.}
+KV-Ground-8B~\cite{kvground} (specialist, bf16, max\_pixels $= 99$M) and Qwen3.5-27B~\cite{qwen35} (generalist, AWQ-4bit via compressed\_tensors). Both use SDPA attention, 2-step zoom with $r = 0.5$, greedy decoding. Hardware: NVIDIA H200 141GB.
 
 \paragraph{Baselines.}
-We compare against: KV-Ground-8B (single model, 2-step zoom), the current leaderboard \#1; Qwen3.5-27B (single model, 2-step zoom); stage split (KV-Ground step-1, Qwen step-2); midpoint fusion; vote with agreement; KV-default fallback; and oracle (always picks the correct model).
+KV-Ground-8B alone (current leaderboard \#1), Qwen3.5-27B alone, stage split (KV step-1, Qwen step-2), midpoint fusion, vote with agreement, KV-default fallback, and oracle.
 
 \section{Results}
 
-\subsection{Main Results}
+\subsection{Oracle Headroom and Extraction Rate}
 
 \begin{table}[h]
 \centering
-\caption{Comparison of routing strategies on ScreenSpot-Pro (1,581 samples).}
+\caption{Oracle decomposition on ScreenSpot-Pro (1,581 samples).}
+\label{tab:oracle}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Partition} & \textbf{Samples} & \textbf{Fraction} \\
+\midrule
+Both correct ($\mathcal{S}_{11}$) & 962 & 60.8\% \\
+Only KV correct ($\mathcal{S}_{10}$) & 304 & 19.2\% \\
+Only Qwen correct ($\mathcal{S}_{01}$) & 79 & 5.0\% \\
+Both wrong ($\mathcal{S}_{00}$) & 236 & 14.9\% \\
+\midrule
+Oracle accuracy & 1,345 / 1,581 & 85.1\% \\
+Oracle headroom over KV & 79 & +5.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The oracle headroom is 79 samples (5.0\%). The consistency router captures 13 of these ($\eta = 16.5\%$), with 35 losses and 48 gains (net +13), for a final accuracy of 80.9\%.
+
+\subsection{Comparison of Routing Strategies}
+
+\begin{table}[h]
+\centering
+\caption{Routing strategies ranked by accuracy. Only the consistency router exceeds the KV baseline.}
 \label{tab:main}
-\begin{tabular}{lccr}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Method} & \textbf{Accuracy} & \textbf{Correct} & \textbf{vs.\ KV} \\
+\textbf{Method} & \textbf{Accuracy} & \textbf{vs.\ KV} & \textbf{Oracle $\eta$} \\
 \midrule
-\textbf{Consistency Router (ours)} & \textbf{80.9\%} & \textbf{1,279} & \textbf{+0.8\%} \\
-KV-Ground-8B (baseline) & 80.1\% & 1,266 & --- \\
-Stage split KV$\rightarrow$Qwen & 78.7\% & 1,245 & $-$1.3\% \\
-Vote agree $T{=}50$ & 76.9\% & 1,215 & $-$3.2\% \\
-Midpoint fusion & 75.7\% & 1,196 & $-$4.4\% \\
-Step-1 vote centroid & 72.5\% & 1,146 & $-$7.6\% \\
-KV fallback $T{=}300$ & 69.6\% & 1,100 & $-$10.5\% \\
-Qwen3.5-27B only & 60.9\% & 962 & $-$19.2\% \\
+\textbf{Consistency Router} & \textbf{80.9\%} & \textbf{+0.8\%} & \textbf{16.5\%} \\
+KV-Ground-8B & 80.1\% & --- & 0\% \\
+Stage split KV$\to$Qwen & 78.7\% & $-$1.3\% & $< 0$ \\
+Vote agree $T{=}50$ & 76.9\% & $-$3.2\% & $< 0$ \\
+Midpoint fusion & 75.7\% & $-$4.4\% & $< 0$ \\
+Qwen3.5-27B only & 60.9\% & $-$19.2\% & $< 0$ \\
 \midrule
-Oracle (upper bound) & 85.1\% & 1,345 & +5.0\% \\
+Oracle & 85.1\% & +5.0\% & 100\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Our consistency router achieves 80.9\%, a new state of the art on ScreenSpot-Pro. All other ensemble strategies performed \emph{worse} than the KV-Ground baseline, showing that naive ensembling hurts in this domain and that confidence-based routing is essential.
+All other ensemble strategies extract negative oracle headroom: they introduce more losses than gains. The consistency router is the only strategy that satisfies Theorem~\ref{thm:routing}.
 
-\subsection{Per-Category Results}
+\subsection{Per-Category Analysis}
 
 \begin{table}[h]
 \centering
-\caption{Per-category results of the zoom consistency router.}
+\caption{Router behavior by category. The router adapts: KV-Ground is selected more on specialist tools, Qwen more on consumer software.}
 \label{tab:category}
-\begin{tabular}{lrrrr}
-\toprule
-\textbf{Category} & \textbf{$n$} & \textbf{Icon} & \textbf{Text} & \textbf{Avg} \\
-\midrule
-Office & 230 & 75.5\% & 94.9\% & 90.4\% \\
-Scientific & 254 & 70.9\% & 93.8\% & 83.9\% \\
-Dev & 299 & 73.1\% & 93.5\% & 83.6\% \\
-CAD & 261 & 51.6\% & 87.8\% & 78.9\% \\
-Creative & 341 & 62.2\% & 85.4\% & 75.7\% \\
-OS & 196 & 56.2\% & 87.8\% & 73.5\% \\
-\midrule
-\textbf{Overall} & \textbf{1,581} & \textbf{65.6\%} & \textbf{90.4\%} & \textbf{80.9\%} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The router's gains are distributed across categories, with no single category driving the improvement.
-
-\subsection{Routing Statistics and Per-Application Analysis}
-
-The router selects KV-Ground for 64.9\% of samples and Qwen3.5-27B for 35.1\%. The routing distribution varies by category (Table~\ref{tab:routing}).
-
-\begin{table}[h]
-\centering
-\caption{Router model selection by category. Qwen is selected more often for general-purpose software and less for specialist professional tools.}
-\label{tab:routing}
-\begin{tabular}{lrrr}
-\toprule
-\textbf{Category} & \textbf{$n$} & \textbf{KV selected} & \textbf{Qwen selected} \\
-\midrule
-CAD & 261 & 86.6\% & 13.4\% \\
-Dev & 299 & 64.9\% & 35.1\% \\
-Scientific & 254 & 63.8\% & 36.2\% \\
-Creative & 341 & 61.9\% & 38.1\% \\
-OS & 196 & 57.1\% & 42.9\% \\
-Office & 230 & 52.6\% & 47.4\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The router's behavior reflects domain-specific confidence patterns. For CAD applications (AutoCAD, Inventor, SolidWorks), KV-Ground is selected 86.6\% of the time. KV-Ground was trained on millions of professional GUI screenshots, so its zoom consistency is high on these specialist interfaces. For Office applications (Word, Excel, PowerPoint), Qwen is selected 47.4\% of the time, nearly equal to KV-Ground. These consumer interfaces are well-represented in Qwen3.5's general pretraining data.
-
-Table~\ref{tab:perapps} shows the per-application breakdown for the 15 applications where the router changes the outcome relative to KV-Ground.
-
-\begin{table}[h]
-\centering
-\caption{Per-application accuracy where the router differs from KV-Ground baseline.}
-\label{tab:perapps}
-\small
 \begin{tabular}{lrrrrr}
 \toprule
-\textbf{Application} & \textbf{$n$} & \textbf{KV} & \textbf{Router} & \textbf{$\Delta$} & \textbf{Qwen \%} \\
+\textbf{Category} & \textbf{$n$} & \textbf{KV} & \textbf{Router} & \textbf{$\Delta$} & \textbf{Qwen \%} \\
 \midrule
-photoshop & 51 & 76.5\% & 84.3\% & +7.8\% & 49.0\% \\
-macos\_common & 65 & 75.4\% & 80.0\% & +4.6\% & 46.2\% \\
-illustrator & 31 & 83.9\% & 87.1\% & +3.2\% & 25.8\% \\
-blender & 71 & 76.1\% & 78.9\% & +2.8\% & 40.8\% \\
-pycharm & 78 & 78.2\% & 80.8\% & +2.6\% & 43.6\% \\
-windows\_common & 81 & 65.4\% & 67.9\% & +2.5\% & 39.5\% \\
-vmware & 41 & 92.7\% & 95.1\% & +2.4\% & 58.5\% \\
-stata & 49 & 77.6\% & 79.6\% & +2.0\% & 36.7\% \\
-android\_studio & 80 & 78.7\% & 80.0\% & +1.3\% & 17.5\% \\
-word & 84 & 92.9\% & 94.0\% & +1.2\% & 50.0\% \\
-matlab & 93 & 90.3\% & 91.4\% & +1.1\% & 54.8\% \\
-\midrule
-vivado & 80 & 77.5\% & 76.2\% & $-$1.3\% & 25.0\% \\
-quartus & 45 & 88.9\% & 86.7\% & $-$2.2\% & 28.9\% \\
-vscode & 55 & 85.5\% & 81.8\% & $-$3.6\% & 36.4\% \\
-davinci & 44 & 79.5\% & 75.0\% & $-$4.5\% & 22.7\% \\
+Office & 230 & 89.6\% & 90.4\% & +0.9\% & 47.4\% \\
+Scientific & 254 & 83.1\% & 83.9\% & +0.8\% & 36.2\% \\
+Dev & 299 & 82.9\% & 83.6\% & +0.7\% & 35.1\% \\
+CAD & 261 & 78.5\% & 78.9\% & +0.4\% & 13.4\% \\
+Creative & 341 & 74.5\% & 75.7\% & +1.2\% & 38.1\% \\
+OS & 196 & 72.4\% & 73.5\% & +1.0\% & 42.9\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The router improves accuracy on 11 applications and reduces it on 4. The largest gain is on Photoshop (+7.8\%), where Qwen3.5-27B's general visual understanding helps with Photoshop's standard toolbar and menu layouts. The largest regression is on DaVinci Resolve ($-$4.5\%), where the router occasionally selects Qwen on samples that KV-Ground handles correctly. The net effect across all 26 applications is positive (+0.8\%).
-
-\subsection{Icon vs.\ Text Analysis}
+The router adapts its behavior from the consistency signal alone, with no category labels. On CAD applications, KV-Ground's consistency is typically low (the specialist is confident on specialist tools), so KV is selected 86.6\% of the time. On Office and OS applications, Qwen is selected 43--47\% of the time, reflecting its familiarity with consumer interfaces from pretraining.
 
 \begin{table}[h]
 \centering
-\caption{Router gains on icon vs.\ text UI elements.}
-\label{tab:uitype}
+\caption{Applications with largest router gains and losses.}
+\label{tab:perapps}
+\small
 \begin{tabular}{lrrrr}
 \toprule
-\textbf{UI Type} & \textbf{$n$} & \textbf{KV baseline} & \textbf{Router} & \textbf{$\Delta$} \\
+\textbf{Application} & \textbf{$n$} & \textbf{KV} & \textbf{Router} & \textbf{$\Delta$} \\
 \midrule
-Icon & 604 & 64.6\% & 65.6\% & +1.0\% \\
-Text & 977 & 89.7\% & 90.4\% & +0.7\% \\
+photoshop & 51 & 76.5\% & 84.3\% & +7.8\% \\
+macos\_common & 65 & 75.4\% & 80.0\% & +4.6\% \\
+illustrator & 31 & 83.9\% & 87.1\% & +3.2\% \\
+blender & 71 & 76.1\% & 78.9\% & +2.8\% \\
+\midrule
+vivado & 80 & 77.5\% & 76.2\% & $-$1.3\% \\
+quartus & 45 & 88.9\% & 86.7\% & $-$2.2\% \\
+vscode & 55 & 85.5\% & 81.8\% & $-$3.6\% \\
+davinci & 44 & 79.5\% & 75.0\% & $-$4.5\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Gains are balanced between icon and text targets. The router does not disproportionately benefit one UI element type over the other.
+The router improves on 11 of 26 applications and regresses on 4. The largest gain is Photoshop (+7.8\%), where Qwen's general visual understanding helps. The largest regression is DaVinci Resolve ($-$4.5\%).
 
-\section{Analysis}
+\section{Statistical Analysis}
 
-\subsection{Zoom Consistency as a Confidence Signal}
-
-We bucket samples by zoom consistency and measure accuracy for each model independently (Table~\ref{tab:consistency}).
+\subsection{Zoom Consistency Correlates with Accuracy}
 
 \begin{table}[h]
 \centering
-\caption{KV-Ground accuracy by zoom consistency bucket. Lower consistency (closer to crop center) correlates with higher accuracy.}
+\caption{KV-Ground accuracy by zoom consistency bucket.}
 \label{tab:consistency}
 \begin{tabular}{lrr}
 \toprule
 \textbf{Consistency $c$} & \textbf{$n$} & \textbf{Accuracy} \\
 \midrule
-$< 30$ (very confident) & 464 & 87.1\% \\
+$< 30$ & 464 & 87.1\% \\
 $30$--$80$ & 101 & 85.1\% \\
 $80$--$150$ & 106 & 76.4\% \\
 $150$--$250$ & 173 & 79.8\% \\
-$\geq 250$ (uncertain) & 737 & 75.6\% \\
+$\geq 250$ & 737 & 75.6\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The correlation is monotonic: samples where step-2 barely moved from center (consistency $< 30$) have 87.1\% accuracy, while samples where step-2 made large corrections ($\geq 250$) have 75.6\%. This 11.5-point gap confirms that zoom consistency is a meaningful confidence signal.
+The Spearman rank correlation between zoom consistency and binary correctness is $\rho = -0.139$ ($p < 10^{-6}$, $n = 1{,}581$) for KV-Ground and $\rho = -0.109$ ($p = 0.0003$, $n = 1{,}097$) for Qwen3.5-27B. The point-biserial correlation is $r = -0.125$ ($p < 10^{-6}$) for KV-Ground. The negative sign confirms: lower consistency (closer to crop center) predicts higher accuracy.
 
-Qwen3.5-27B shows a similar pattern: 90.2\% accuracy at consistency $< 30$ versus 80.7\% at consistency $\geq 250$, a 9.5-point gap. The weaker gap for Qwen is expected because Qwen was not trained on the zoom pipeline and its step-2 behavior is less calibrated.
+The correlation is weak ($|\rho| \approx 0.13$), consistent with the modest oracle extraction rate: the signal discriminates between correct and incorrect predictions with limited precision.
 
-\subsection{Why the Router is Adaptive}
+\subsection{Significance of the Routing Improvement}
 
-The router adapts its behavior based on domain-specific confidence patterns. On CAD applications, KV-Ground's zoom consistency is typically low (the specialist is confident on specialist tools), so the router selects KV-Ground 86.6\% of the time. On Office and OS applications, Qwen3.5-27B's zoom consistency is often competitive with or lower than KV-Ground's, reflecting Qwen's familiarity with consumer interfaces from pretraining. The router responds by selecting Qwen 42--47\% of the time on these categories.
-
-This adaptive behavior emerges from the consistency signal alone, with no application labels or category metadata provided to the router.
-
-\subsection{Why Other Ensemble Strategies Fail}
-
-\textbf{Stage split} (KV step-1, Qwen step-2) forces Qwen to refine every sample's zoomed crop, even when KV-Ground would have been better at refinement. On ScreenSpot-Pro, KV-Ground's GUI-specific training makes it a better refiner on 78\% of samples.
-
-\textbf{Midpoint fusion} averages two coordinate predictions, often pulling a correct prediction out of the bounding box. GUI bounding boxes are small (median area 0.1\% of the image), so even a small perturbation from averaging causes a miss.
-
-\textbf{Vote with agreement} provides no mechanism to exploit disagreement constructively. When models disagree, defaulting to KV-Ground misses Qwen's unique wins.
-
-\textbf{KV fallback with threshold} routes to Qwen when KV is uncertain. This fails because Qwen's overall accuracy (60.9\%) is far below KV's (80.1\%). Even when KV is uncertain, it is still more likely correct than Qwen.
-
-The consistency router succeeds because it can always choose KV-Ground when KV is more confident, uses a per-sample signal rather than static rules, and measures each model's self-consistency independently through its own zoom pipeline.
-
-\subsection{Oracle Analysis}
-
-Of the 1,581 samples, the oracle (which always picks the correct model) achieves 85.1\% (1,345 correct). The breakdown:
-
-\begin{itemize}
-    \item \textbf{Both correct}: 962 samples (60.8\%)
-    \item \textbf{Only KV correct}: 304 samples (19.2\%)
-    \item \textbf{Only Qwen correct}: 79 samples (5.0\%)
-    \item \textbf{Both wrong}: 236 samples (14.9\%)
-\end{itemize}
-
-The router's task is to capture as many of the 79 Qwen-unique wins as possible without losing the 304 KV-unique wins. It captures 13 of the 79 (16.5\% capture rate) while losing minimal KV-unique wins, yielding a net gain of +13 correct samples.
-
-\subsection{Screening vs.\ Full Evaluation}
-
-We initially validated on a 200-sample screening subset before running the full 1,581-sample evaluation (Table~\ref{tab:screening}).
+Bootstrap resampling (10,000 iterations) yields 95\% confidence intervals:
 
 \begin{table}[h]
 \centering
-\caption{Router gain on screening (200 samples) vs.\ full evaluation (1,581 samples).}
-\label{tab:screening}
-\begin{tabular}{lrr}
+\caption{Bootstrap confidence intervals and significance tests.}
+\label{tab:stats}
+\begin{tabular}{lr}
 \toprule
-\textbf{Metric} & \textbf{Screening} & \textbf{Full} \\
+\textbf{Metric} & \textbf{Value} \\
 \midrule
-KV-Ground baseline & 84.5\% & 80.1\% \\
-Consistency router & 86.0\% & 80.9\% \\
-Router gain & +1.5\% & +0.8\% \\
-Oracle & 89.5\% & 85.1\% \\
+KV-Ground accuracy & 80.08\% [78.05\%, 81.98\%] \\
+Router accuracy & 80.90\% [78.94\%, 82.80\%] \\
+Difference & +0.82\% [$-$0.25\%, +1.96\%] \\
+$P(\text{diff} > 0)$ & 92.3\% \\
+McNemar $\chi^2$ & 1.73 ($p = 0.188$) \\
+Cohen's $h$ & 0.021 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The router gain shrinks from +1.5\% on screening to +0.8\% on full evaluation. The full dataset includes harder professional tools where both models struggle and the oracle advantage is smaller. Screening results can overstate improvements by roughly $2\times$.
+The improvement is directionally consistent ($P > 92\%$) but does not reach statistical significance at $\alpha = 0.05$ (McNemar $p = 0.188$, bootstrap CI includes zero). The effect size is negligible (Cohen's $h = 0.02$, where small effects start at $0.20$).
+
+This result reflects the fundamental limitation of the current model pair: the oracle headroom is only 79 samples (5\%), and the consistency signal captures 16.5\% of it. Significance would require either a larger benchmark or a model pair with greater complementary strength.
+
+\section{Analysis: Bottlenecks to Oracle Extraction}
+
+\subsection{Why 16.5\%?}
+
+By Theorem~\ref{thm:routing}, the router must achieve precision $> 1/2$ on the disagreement set $\mathcal{D}$ ($|\mathcal{D}| = 383$, base rate $\pi = 20.6\%$). The observed router has 48 gains and 35 losses (precision = 57.8\%, net +13). Three factors limit the extraction rate:
+
+\textbf{Weak generalist.} Qwen3.5-27B achieves 60.9\% standalone accuracy, contributing only 79 unique wins. A generalist at 75\% accuracy would increase $n_{01}$ and widen the oracle headroom.
+
+\textbf{Weak correlation.} The Spearman $\rho \approx -0.13$ means zoom consistency is a noisy discriminator. On the disagreement set, the signal must separate minority-class samples ($\mathcal{S}_{01}$, 20.6\%) from majority-class samples ($\mathcal{S}_{10}$, 79.4\%), requiring $2.4\times$ precision lift.
+
+\textbf{Asymmetric risk.} Losses ($\mathcal{S}_{10}$, 304 samples) outnumber gains ($\mathcal{S}_{01}$, 79 samples) by $3.8\times$. The router must be highly selective when choosing the generalist.
+
+\subsection{When Would Extraction Rate Increase?}
+
+From Theorem~\ref{thm:routing} and Proposition~\ref{prop:linear}, the extraction rate $\eta$ increases when:
+
+\begin{enumerate}
+    \item \textbf{Larger oracle headroom.} A GUI-trained generalist (e.g., fine-tuning Qwen3.5-27B on GUI data) would increase $n_{01}$, making the minority class easier to detect.
+    \item \textbf{Stronger correlation.} Models trained with the zoom pipeline (rather than applied to it post-hoc) may produce better-calibrated consistency signals ($|\rho| > 0.2$).
+    \item \textbf{More symmetric disagreement.} If $n_{01}/n_{10}$ approaches 1 (models of similar accuracy with different failure modes), precision $> 1/2$ is easier to achieve.
+\end{enumerate}
 
 \section{Limitations}
 
 \begin{enumerate}
-    \item \textbf{Computational cost.} The router runs two full models (2 forward passes each, 4 total), doubling inference time compared to a single model.
-    \item \textbf{Modest gains.} The improvement (+0.8\% on full eval) is real but small. A stronger generalist model could increase the capture rate beyond 16.5\% of the oracle advantage.
-    \item \textbf{Generalist model quality.} Qwen3.5-27B-AWQ achieves 60.9\% standalone accuracy, limiting the oracle ceiling. A GUI-trained generalist could significantly increase the complementary advantage.
-    \item \textbf{Zoom consistency limitations.} The signal is strongest for KV-Ground (11.5-point gap) and weaker for Qwen (9.5-point gap). Models trained specifically for zoom pipelines may have artificially calibrated consistency, reducing discriminative power.
-    \item \textbf{Per-application regressions.} The router reduces accuracy on 4 of 26 applications (DaVinci $-$4.5\%, VSCode $-$3.6\%, Quartus $-$2.2\%, Vivado $-$1.3\%). These regressions are outweighed by gains elsewhere, but a production deployment may need per-application safeguards.
+    \item The improvement is not statistically significant at $\alpha = 0.05$. The effect size (Cohen's $h = 0.02$) is negligible.
+    \item The router doubles inference cost (4 forward passes vs. 2).
+    \item The oracle extraction rate (16.5\%) is low, bounded by the generalist's 60.9\% standalone accuracy.
+    \item The consistency signal ($|\rho| = 0.13$) is weak. Models trained on the zoom pipeline may exhibit artificially low consistency even when wrong.
+    \item The router regresses on 4 of 26 applications (up to $-$4.5\%).
 \end{enumerate}
 
 \section{Conclusion}
 
-We introduced \emph{zoom consistency}, the distance between a model's zoom-refinement prediction and the crop center, as a free, per-sample confidence signal for GUI grounding. By routing between KV-Ground-8B and Qwen3.5-27B based on which has lower zoom consistency, we achieve 80.9\% on ScreenSpot-Pro without any additional training. The router adapts its behavior by domain: selecting the specialist 87\% of the time on CAD applications and the generalist up to 47\% of the time on consumer software, all from the consistency signal alone. The zoom consistency signal is general and could be applied to any multi-step refinement pipeline.
+We formalized \emph{zoom consistency} as a free confidence signal in multi-step GUI grounding pipelines and proved it is proportional to step-1 spatial error. The signal correlates significantly with accuracy ($p < 10^{-6}$) and enables cross-model routing without calibration. On ScreenSpot-Pro, the consistency router captures 16.5\% of the oracle headroom between KV-Ground-8B and Qwen3.5-27B, achieving 80.9\%. The improvement is directionally consistent (92.3\% bootstrap probability) but does not reach conventional significance thresholds with the current model pair. Our theoretical framework (Theorem~\ref{thm:routing}) identifies the bottleneck: the generalist model's low standalone accuracy limits the oracle headroom available for extraction. A stronger generalist would increase both the headroom and the extraction rate, making the zoom consistency signal more valuable.
 
 \bibliography{references}
 \bibliographystyle{plainnat}
