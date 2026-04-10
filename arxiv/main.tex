@@ -30,19 +30,19 @@
 \maketitle
 
 \begin{abstract}
-Multi-step zoom-in pipelines are the dominant approach to GUI grounding, yet the intermediate predictions they produce are typically discarded after coordinate remapping. We observe that these intermediate outputs contain a useful confidence signal for free: \emph{zoom consistency}, the distance between a model's step-2 prediction and the crop center. We prove this quantity is a linear estimator of step-1 spatial error under idealized conditions (perfect step-2, target within crop) and show it correlates significantly with prediction correctness across two architecturally different VLMs (Spearman $\rho = -0.14$, $p < 10^{-6}$ for KV-Ground-8B; $\rho = -0.11$, $p = 0.0003$ for Qwen3.5-27B). Because zoom consistency is a geometric quantity in a shared coordinate space, it is directly comparable across models without calibration, unlike log-probabilities or token-level uncertainty. We validate the signal on 1,581 samples from ScreenSpot-Pro and demonstrate one application: using zoom consistency to route between a specialist and generalist model, capturing 16.5\% of the oracle headroom between them (+0.8\%, McNemar $p = 0.19$). The signal is simple, requires no training or extra forward passes, and applies to any pipeline that refines predictions through iterative cropping. Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
+Multi-step zoom-in pipelines are widely used for GUI grounding, yet the intermediate predictions they produce are typically discarded after coordinate remapping. We observe that these intermediate outputs contain a useful confidence signal for free: \emph{zoom consistency}, the distance between a model's step-2 prediction and the crop center. We prove this quantity is a linear estimator of step-1 spatial error under idealized conditions (perfect step-2, target within crop) and show it correlates significantly with prediction correctness across two architecturally different VLMs (Spearman $\rho = -0.14$, $p < 10^{-6}$ for KV-Ground-8B; $\rho = -0.11$, $p = 0.0003$ for Qwen3.5-27B). Because zoom consistency is a geometric quantity in a shared coordinate space, it is directly comparable across models without calibration, unlike log-probabilities or token-level uncertainty. We validate the signal on 1,581 samples from ScreenSpot-Pro and demonstrate one application: using zoom consistency to route between a specialist and generalist model, capturing 16.5\% of the oracle headroom between them (+0.8\%, McNemar $p = 0.19$). The signal is simple, requires no training or extra forward passes, and applies to any pipeline that refines predictions through iterative cropping. Code is available at \url{https://github.com/omxyz/zoom-consistency-routing}.
 \end{abstract}
 
 \section{Introduction}
 
-Multi-step zoom-in pipelines have become the standard approach for high-resolution GUI grounding~\cite{zoomclick,laser,adazoomgui}. In a typical 2-step pipeline, a VLM predicts an initial click location on the full screenshot, a crop is extracted around that prediction and resized, and the VLM re-predicts on the zoomed view. The step-2 prediction is remapped to original coordinates, and the step-1 prediction is discarded.
+Multi-step zoom-in pipelines are widely used for high-resolution GUI grounding~\cite{zoomclick,laser,adazoomgui}. In a typical 2-step pipeline, a VLM predicts an initial click location on the full screenshot, a crop is extracted around that prediction and resized, and the VLM re-predicts on the zoomed view. The step-2 prediction is remapped to original coordinates, and the step-1 prediction is discarded.
 
 We observe that the relationship between the step-2 prediction and the crop center encodes useful information about prediction quality. If step-1 was accurate, the target element is near the crop center, so step-2 should predict near the center. If step-1 was off, the target is displaced from the center, and step-2 must predict away from center to compensate. This displacement, which we call \emph{zoom consistency}, is a free confidence signal: it requires no extra computation, no training, and no access to model internals.
 
 This paper formalizes zoom consistency, characterizes its properties, and validates it empirically. Our contributions:
 
 \begin{enumerate}
-    \item We define zoom consistency and prove it is a linear estimator of step-1 spatial error under mild conditions (Proposition~\ref{prop:linear}). We characterize three failure modes where the linear relationship breaks.
+    \item We define zoom consistency and prove it is a linear estimator of step-1 spatial error under idealized conditions (Proposition~\ref{prop:linear}). We characterize three failure modes where the linear relationship breaks.
     \item We show that zoom consistency is directly comparable across architecturally different VLMs without calibration (Proposition~\ref{prop:calibration}), a property that log-probabilities and token-level uncertainty scores lack.
     \item We validate the signal on 1,581 samples from ScreenSpot-Pro across two models (KV-Ground-8B and Qwen3.5-27B), showing significant negative correlation with accuracy ($p < 10^{-6}$).
     \item As a proof-of-concept application, we use zoom consistency for cross-model routing, deriving the exact condition under which such routing improves over the stronger model alone (Theorem~\ref{thm:routing}).
@@ -85,7 +85,7 @@ Let $\mathbf{t}$ be the true target and $\hat{p}_1 = \mathbf{t} + \boldsymbol{\v
 Under perfect step-2, $\hat{p}_2 = \phi(\mathbf{t}) = (\mathbf{t} - \hat{p}_1)/r + \mathbf{m} = -\boldsymbol{\varepsilon}_1/r + \mathbf{m}$. Therefore $\hat{p}_2 - \mathbf{m} = -\boldsymbol{\varepsilon}_1/r$ and $c = \|\boldsymbol{\varepsilon}_1\|/r$.
 \end{proof}
 
-For a crop ratio $r = 0.5$, the zoom magnifies step-1 error by $2\times$: a consistency of $c = 100$ corresponds to step-1 error of 50 pixels (5\% of image width). The linear relationship provides a direct, interpretable readout of localization quality.
+For a crop ratio $r = 0.5$, the zoom magnifies step-1 error by $2\times$: a consistency of $c = 100$ corresponds to step-1 error of 50 pixels (5\% of image width). The linear relationship provides a direct, interpretable readout of localization quality. Note that the step-1-to-final coordinate shift $\|\hat{p}_1 - \text{final}\| = r \cdot c$ is a linear rescaling of zoom consistency, so the two signals rank identically; $c$ is the natural form because it does not depend on $r$.
 
 \paragraph{Failure modes.} The linear relationship breaks in three cases:
 \begin{enumerate}
@@ -100,7 +100,7 @@ For a crop ratio $r = 0.5$, the zoom magnifies step-1 error by $2\times$: a cons
 Let $M_A$ and $M_B$ be VLMs with different tokenizers $\mathcal{T}_A, \mathcal{T}_B$. Their zoom consistency values $c_A, c_B \in [0, 500\sqrt{2}]$ are directly comparable. In contrast, log-probability scores $\ell_A, \ell_B$ depend on token count ($L_A \neq L_B$ for identical coordinate strings), softmax temperature, and vocabulary size, requiring per-model calibration functions $g_i: \mathbb{R} \to [0,1]$ learned on held-out data.
 \end{proposition}
 
-This property arises because zoom consistency is a geometric quantity in the shared $1000\times1000$ coordinate space that both models output into. The comparison $c_A < c_B$ is a statement about Euclidean distances, independent of how each model internally represents coordinates. This makes zoom consistency immediately usable for cross-model decisions (routing, selection, ensembling) without any calibration step.
+This property arises because zoom consistency is a geometric quantity in the shared $1000\times1000$ coordinate space that both models output into. The comparison $c_A < c_B$ is a statement about Euclidean distances, independent of how each model internally represents coordinates. This assumes both models use the same crop ratio $r$ and coordinate normalization, which is standard in zoom pipelines. Under this assumption, zoom consistency is immediately usable for cross-model decisions without any calibration step.
 
 \subsection{Coverage-Magnification Trade-off}
 
@@ -142,7 +142,7 @@ Qwen3.5-27B & 0.588 & $-0.109$ & $0.0003$ & 1,097 \\
 \end{tabular}
 \end{table}
 
-The AUC exceeds 0.5 (random) for both models, confirming zoom consistency carries discriminative information about prediction correctness. The correlation is consistent across both models and stable under cross-validation: splitting the KV-Ground data into random halves yields $\rho = -0.118$ ($p = 9 \times 10^{-4}$) and $\rho = -0.161$ ($p = 5 \times 10^{-6}$). The Qwen sample count ($n = 1{,}097$) is smaller than the full benchmark because 484 samples produced unparseable coordinate outputs under AWQ-4bit quantization and are excluded from the correlation analysis.
+The AUC exceeds 0.5 (random) for both models, confirming zoom consistency carries discriminative information about prediction correctness. The correlation is consistent across both models and stable under cross-validation: splitting the KV-Ground data into random halves yields $\rho = -0.118$ ($p = 9 \times 10^{-4}$) and $\rho = -0.161$ ($p = 5 \times 10^{-6}$). The Qwen sample count ($n = 1{,}097$) is smaller than the full benchmark because 484 samples produced unparseable coordinate outputs under AWQ-4bit quantization (88\% failed at step-1). These are not random: they concentrate in CAD applications (69\% failure rate) and correspond to harder samples where KV-Ground also struggles (69\% accuracy vs.\ 85\% on parseable samples). The Qwen correlation is therefore measured on an easier subset, and the true signal strength on the full distribution may be weaker.
 
 \begin{table}[h]
 \centering
@@ -164,6 +164,8 @@ $\geq 250$ & 737 & 75.6\% \\
 The lowest-consistency bucket ($c < 30$) has 87.1\% accuracy, 11.5 points above the highest bucket ($c \geq 250$, 75.6\%). The relationship is not perfectly monotonic: the 150--250 bucket (79.8\%) slightly exceeds the 80--150 bucket (76.4\%), consistent with the moderate correlation strength.
 
 \subsection{Consistency Distribution by Oracle Partition}
+
+To understand how zoom consistency relates to cross-model agreement, we partition the 1,581 samples by correctness: $\mathcal{S}_{11}$ (both correct), $\mathcal{S}_{10}$ (only KV correct), $\mathcal{S}_{01}$ (only Qwen correct), $\mathcal{S}_{00}$ (both wrong).
 
 \begin{table}[h]
 \centering
@@ -295,7 +297,7 @@ The base rate of $\mathcal{S}_{01}$ in $\mathcal{D}$ is $\pi = n_{01}/(n_{10} + 
 \textbf{Consistency Router} & \textbf{80.9\%} & \textbf{+0.8\%} & \textbf{16.5\%} \\
 KV-Ground-8B & 80.1\% & --- & 0\% \\
 Stage split KV$\to$Qwen & 78.7\% & $-$1.3\% & $< 0$ \\
-Vote agree $T{=}50$ & 76.9\% & $-$3.2\% & $< 0$ \\
+Vote agree ($d{<}50$) & 76.9\% & $-$3.2\% & $< 0$ \\
 Midpoint fusion & 75.7\% & $-$4.4\% & $< 0$ \\
 Qwen3.5-27B only & 60.9\% & $-$19.2\% & $< 0$ \\
 \midrule
@@ -336,7 +338,7 @@ davinci & 44 & 79.5\% & 75.0\% & $-$4.5\% \\
 
 Zoom consistency is a general confidence signal. Beyond routing, it could enable:
 
-\textbf{Selective zoom.} If step-1 consistency can be estimated (e.g., via a lightweight head or by comparing against a running average), low-confidence predictions could trigger zooming while high-confidence ones skip it, saving the cost of step-2 entirely.
+\textbf{Multi-step pipelines.} In pipelines with 3+ zoom steps, zoom consistency from step $k$ could decide whether step $k{+}1$ is worth the additional cost, enabling early stopping when the model is already confident.
 
 \textbf{Confidence-aware agents.} GUI agents that execute multi-step workflows could use zoom consistency to flag uncertain click predictions before committing to irreversible actions, enabling human-in-the-loop confirmation on low-confidence steps.
 
@@ -365,7 +367,7 @@ The 16.5\% oracle extraction rate is limited by three factors:
 
 \section{Conclusion}
 
-We identified and formalized \emph{zoom consistency} as a free confidence signal embedded in multi-step GUI grounding pipelines. The signal is a linear estimator of step-1 spatial error (Proposition~\ref{prop:linear}), correlates significantly with prediction correctness ($p < 10^{-6}$), and is comparable across models without calibration (Proposition~\ref{prop:calibration}). As a proof-of-concept, consistency-based routing between KV-Ground-8B and Qwen3.5-27B captures 16.5\% of the oracle headroom on ScreenSpot-Pro. The modest extraction rate reflects the moderate signal strength and the asymmetric disagreement set, both quantified by our routing theorem (Theorem~\ref{thm:routing}). The signal is simple, requires no training or extra computation, and may be useful beyond routing for confidence estimation, quality monitoring, and selective computation in any iterative refinement pipeline.
+We identified and formalized \emph{zoom consistency} as a free confidence signal embedded in multi-step GUI grounding pipelines. The signal is a linear estimator of step-1 spatial error (Proposition~\ref{prop:linear}), correlates significantly with prediction correctness ($p < 10^{-6}$), and is comparable across models without calibration (Proposition~\ref{prop:calibration}). As a proof-of-concept, consistency-based routing between KV-Ground-8B and Qwen3.5-27B captures 16.5\% of the oracle headroom on ScreenSpot-Pro. The modest extraction rate reflects the moderate signal strength and the asymmetric disagreement set, both quantified by our routing theorem (Theorem~\ref{thm:routing}). The signal is simple, requires no training or extra computation, and may be useful beyond routing for confidence estimation, quality monitoring, and selective computation in other iterative refinement pipelines, though cross-benchmark validation remains future work.
 
 \bibliography{references}
 \bibliographystyle{plainnat}
