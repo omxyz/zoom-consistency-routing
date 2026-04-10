@@ -91,6 +91,14 @@ def run_phi4(image, instruction):
 def parse_tool_call(response):
     if not response:
         return None
+    # Format 1: click(x=0.5003, y=0.6102) - Phi-4 style, [0,1] normalized
+    click_match = re.search(r'click\s*\(\s*x\s*=\s*([\d.]+)\s*,\s*y\s*=\s*([\d.]+)\s*\)', response)
+    if click_match:
+        x, y = float(click_match.group(1)), float(click_match.group(2))
+        if x <= 1.0 and y <= 1.0:  # normalized [0,1] -> scale to [0,1000]
+            return (x * 1000, y * 1000)
+        return (x, y)
+    # Format 2: <tool_call>{"name":..., "arguments":{"coordinate":[x,y]}}</tool_call>
     tc_match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", response, re.DOTALL)
     if tc_match:
         try:
@@ -100,10 +108,12 @@ def parse_tool_call(response):
                 return (float(coord[0]), float(coord[1]))
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
+    # Format 3: "coordinate": [x, y]
     coord_match = re.search(
         r'"coordinate"\s*:\s*\[\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\]', response)
     if coord_match:
         return (float(coord_match.group(1)), float(coord_match.group(2)))
+    # Fallback: any two numbers
     nums = re.findall(r'(\d{1,4}(?:\.\d+)?)', response)
     if len(nums) >= 2:
         x, y = float(nums[0]), float(nums[1])
