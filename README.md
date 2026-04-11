@@ -17,7 +17,7 @@ No training required. The confidence signal is free — computed from values the
 
 | Method | ScreenSpot-Pro |
 |---|---|
-| **Zoom Consistency Router (ours)** | **80.9%** |
+| **KV-Ground-8B+Qwen3.5-27B-ZoomConsistency (ours)** | **80.9%** |
 | KV-Ground-8B + ZoomIn (prev. SOTA) | 80.5% |
 | KV-Ground-8B (our reproduction) | 80.1% |
 | Qwen3.5-27B + ZoomIn | 60.9% |
